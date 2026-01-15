@@ -1,0 +1,9 @@
+.*/
+!.github/
+__pycache__/
+logs.txt
+traceback.txt
+*.json
+*.xml
+*.bat
+*.bak

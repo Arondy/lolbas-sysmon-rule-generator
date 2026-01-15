@@ -1,0 +1,27 @@
+[project]
+name = "lolbas-sysmon-rule-generator"
+version = "1.0.0"
+description = "A Python CLI utility for automatically generating Sysmon detection rules from LOLBAS Project data"
+authors = [
+    {name = "arondy",email = "antongatcenko@gmail.com"}
+]
+license = {text = "MIT"}
+readme = "README.md"
+requires-python = ">=3.11,<4.0"
+dependencies = [
+    "httpx (>=0.28.1,<0.29.0)",
+    "lxml (>=6.0.2,<7.0.0)",
+    "loguru (>=0.7.3,<0.8.0)",
+]
+
+
+[build-system]
+requires = ["poetry-core>=2.0.0,<3.0.0"]
+build-backend = "poetry.core.masonry.api"
+
+[dependency-groups]
+dev = [
+    "pytest (>=9.0.2,<10.0.0)",
+    "ruff (>=0.14.11,<0.15.0)",
+    "pre-commit (>=4.5.1,<5.0.0)"
+]

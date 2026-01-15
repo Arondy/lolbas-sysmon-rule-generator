@@ -1,0 +1,123 @@
+# LOLBAS Sysmon Rule Generator Configuration
+
+# This configuration file controls how Sysmon detection rules are generated
+# from LOLBAS (Living Off The Land Binaries and Scripts) data.
+#
+# Documentation: https://lolbas-project.github.io/
+# Sysmon: https://docs.microsoft.com/en-us/sysinternals/downloads/sysmon
+
+[categories]
+# Enabled LOLBAS categories for rule generation.
+# Each category maps to specific abuse techniques. Only categories listed here
+# will have detection rules generated.
+#
+# Available categories from LOLBAS:
+#   ADS            - Alternate Data Stream operations
+#   AWL Bypass     - Application Whitelist bypass techniques
+#   Compile        - Code compilation (e.g., csc.exe, msbuild.exe)
+#   Conceal        - Hide malicious activity
+#   Copy           - File copy operations
+#   Credentials    - Credential access/dumping
+#   Decode         - Decode encoded payloads (e.g., certutil -decode)
+#   Download       - Download files from internet
+#   Dump           - Memory/process dumping (e.g., lsass)
+#   Encode         - Encode payloads
+#   Execute        - Arbitrary code/command execution
+#   Reconnaissance - System/network enumeration
+#   Tamper         - Modify system settings/files
+#   UAC Bypass     - User Account Control bypass
+#   Upload         - Exfiltrate data
+
+enabled = [
+  "ADS",
+  "AWL Bypass",
+  "Compile",
+  "Conceal",
+  "Copy",
+  "Credentials",
+  "Decode",
+  "Download",
+  "Dump",
+  "Encode",
+  "Execute",
+  "Reconnaissance",
+  "Tamper",
+  "UAC Bypass",
+  "Upload",
+]
+
+[mappings]
+# Category to Sysmon Event Type Mapping.
+# Maps each LOLBAS category to the appropriate Sysmon event type for detection.
+#
+# Sysmon Event Types used:
+#   ProcessCreate  - Event ID 1: Process creation with command line
+#   FileCreate     - Event ID 11: File creation
+#   ProcessAccess  - Event ID 10: Process access (e.g., credential dumping)
+
+"ADS" = "FileCreate"
+"AWL Bypass" = "ProcessCreate"
+"Compile" = "ProcessCreate"
+"Conceal" = "ProcessCreate"
+"Copy" = "FileCreate"
+"Credentials" = "ProcessAccess"
+"Decode" = "FileCreate"
+"Download" = "ProcessCreate"
+"Dump" = "ProcessAccess"
+"Encode" = "FileCreate"
+"Execute" = "ProcessCreate"
+"Reconnaissance" = "ProcessCreate"
+"Tamper" = "ProcessCreate"
+"UAC Bypass" = "ProcessCreate"
+"Upload" = "ProcessCreate"
+
+[event_conditions]
+# Preferred Condition Tags by Event Type.
+# Defines which XML tags to use for matching executables in each event type.
+# Order matters: first tag is preferred, second is fallback.
+#
+# Tag types:
+#   OriginalFileName - PE header original filename (harder to spoof)
+#   Image            - Full executable path
+#   SourceImage      - Source process in ProcessAccess events
+#
+# Using OriginalFileName is preferred as it's more resistant to renaming attacks.
+
+ProcessCreate = ["OriginalFileName", "Image"]
+ProcessAccess = ["SourceImage", "Image"]
+FileCreate = ["Image"]
+
+[rule_groups]
+# Rule Group Naming Prefixes.
+# Generated rules are organized into RuleGroups with these naming conventions.
+#
+# Two types of rules are generated for each category:
+#   1. CMD rules (more specific) - Match executable + command-line flags
+#   2. Fallback rules (broader)  - Match executable name only
+#
+# CMD rules are placed first in the config as they're more precise.
+
+prefix = "LOLBAS_"
+cmd_prefix = "LOLBAS_CMD_"
+
+# Deduplication: When enabled, skip duplicate rules for same executable
+# within same event type across different categories.
+# Can be overridden with --unique-rules CLI flag.
+
+unique_rules = false
+
+[lolbas]
+# LOLBAS Data Source Configuration.
+# The tool will first check for a local JSON file, then fetch from URL if needed.
+# Fetched data is automatically cached to the json_file path.
+
+json_file = "lolbas.json"
+url = "https://lolbas-project.github.io/api/lolbas.json"
+
+[mitre]
+# MITRE ATT&CK Data Source Configuration.
+# Used to enrich rules with human-readable technique names.
+# The STIX bundle is large (~30MB), so local caching is recommended.
+
+json_file = "enterprise-attack.json"
+url = "https://raw.githubusercontent.com/mitre/cti/master/enterprise-attack/enterprise-attack.json"
