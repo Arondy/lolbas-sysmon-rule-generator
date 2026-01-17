@@ -114,6 +114,11 @@ python -m lolbas_sysmon -i sysmonconfig.xml -o merged_config.xml --force
 python -m lolbas_sysmon --unique-rules
 ```
 
+**Показать покрытые и отсутствующие LOLBins:**
+```bash
+python -m lolbas_sysmon --coverage -i sysmonconfig.xml --show-covered --show-missing
+```
+
 **Использование пользовательской конфигурации:**
 ```bash
 python -m lolbas_sysmon -c my_config.toml
@@ -266,6 +271,22 @@ url = "https://raw.githubusercontent.com/mitre/cti/master/enterprise-attack/ente
 
 5. **Вывод** — Сохраняет standalone XML или объединяет с существующей конфигурацией Sysmon
 
+## Анализ покрытия
+
+Флаг `--coverage` анализирует, сколько LOLBins из проекта LOLBAS покрыто существующей конфигурацией Sysmon:
+
+Пример вывода:
+```
+LOLBAS Coverage Report
+
+Total LOLBins in LOLBAS:    227
+Covered in config:          97
+Missing from config:        130
+Coverage:                   42.7%
+```
+
+LOLBin считается "покрытым", если его `Name` или `OriginalFileName` присутствует в любом правиле конфигурации (теги Image, OriginalFileName, SourceImage или TargetImage).
+
 ## Логика дедупликации
 
 При включённом `--unique-rules`:
@@ -314,7 +335,7 @@ pre-commit run --all-files
 ### Continuous Integration
 
 GitHub Actions автоматически запускается при каждом push/PR:
-- Тесты на Python 3.13
+- Тесты на Python 3.11-3.13
 - Линтинг с помощью ruff
 - Проверка сборки Docker
 

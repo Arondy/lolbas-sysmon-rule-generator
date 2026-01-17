@@ -114,6 +114,11 @@ python -m lolbas_sysmon -i sysmonconfig.xml -o merged_config.xml --force
 python -m lolbas_sysmon --unique-rules
 ```
 
+**Show covered and missing LOLBins:**
+```bash
+python -m lolbas_sysmon --coverage -i sysmonconfig.xml --show-covered --show-missing
+```
+
 **Use custom configuration:**
 ```bash
 python -m lolbas_sysmon -c my_config.toml
@@ -266,6 +271,22 @@ Generated rules follow Sysmon XML schema:
 
 5. **Output** — Saves standalone XML or merges with existing Sysmon config
 
+## Coverage Analysis
+
+The `--coverage` flag analyzes how many LOLBins from the LOLBAS project are covered by existing Sysmon configuration:
+
+Example output:
+```
+LOLBAS Coverage Report
+
+Total LOLBins in LOLBAS:    227
+Covered in config:          97
+Missing from config:        130
+Coverage:                   42.7%
+```
+
+A LOLBin is considered "covered" if its `Name` or `OriginalFileName` appears in any rule within the config (Image, OriginalFileName, SourceImage, or TargetImage tags).
+
 ## Deduplication Logic
 
 With `--unique-rules` enabled:
@@ -314,7 +335,7 @@ pre-commit run --all-files
 ### Continuous Integration
 
 GitHub Actions automatically runs on every push/PR:
-- Tests on Python 3.13
+- Tests on Python 3.11-3.13
 - Linting with ruff
 - Docker build verification
 
