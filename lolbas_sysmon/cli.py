@@ -111,6 +111,21 @@ class CLI:
             action="store_true",
             help="Skip duplicate rules for same executable within same event type",
         )
+        parser.add_argument(
+            "--coverage",
+            action="store_true",
+            help="Analyze LOLBAS coverage in existing Sysmon config (requires -i)",
+        )
+        parser.add_argument(
+            "--show-missing",
+            action="store_true",
+            help="Show list of LOLBins missing from config (use with --coverage)",
+        )
+        parser.add_argument(
+            "--show-covered",
+            action="store_true",
+            help="Show list of LOLBins covered in config (use with --coverage)",
+        )
         return parser
 
     def run(self, args: list[str] | None = None) -> int:
@@ -132,6 +147,9 @@ class CLI:
             Exit code: 0 for success, 1 for errors.
         """
         parsed_args = self.parser.parse_args(args)
+
+        if parsed_args.coverage:
+            return self._run_coverage_analysis(parsed_args)
 
         self.logger.info("Starting LOLBAS Sysmon Rule Generator")
 
@@ -161,7 +179,6 @@ class CLI:
                     self.logger.warning(f"Category '{cat}' is not in enabled categories from config")
             config.categories = categories
 
-        # Override unique_rules from CLI if specified
         if parsed_args.unique_rules:
             config.unique_rules = True
 
@@ -284,9 +301,7 @@ class CLI:
         sysmon_config = generator.create_sysmon_config(rule_groups)
         xml_str = generator.to_xml_string(sysmon_config)
 
-        print("\n" + "=" * 60)
-        print("GENERATED SYSMON RULES")
-        print("=" * 60 + "\n")
+        print("GENERATED SYSMON RULES\n")
         print(xml_str)
 
         total_rules = self._count_all_rules(rule_groups)
@@ -399,3 +414,87 @@ class CLI:
                 if isinstance(child.tag, str):
                     total += len([c for c in child if isinstance(c.tag, str)])
         return total
+
+    def _run_coverage_analysis(self, parsed_args) -> int:
+        """
+        Run LOLBAS coverage analysis on existing Sysmon config.
+
+        Analyzes how many LOLBins from LOLBAS project are covered
+        by rules in the specified Sysmon configuration file.
+
+        Args:
+            parsed_args: Parsed command-line arguments.
+
+        Returns:
+            Exit code: 0 for success, 1 for errors.
+        """
+        if not parsed_args.input:
+            self.logger.error("Coverage analysis requires -i/--input with Sysmon config")
+            return 1
+
+        if not Path(parsed_args.input).exists():
+            self.logger.error(f"Input file not found: {parsed_args.input}")
+            return 1
+
+        self.logger.info("Starting LOLBAS coverage analysis")
+
+        config_loader = ConfigLoader()
+        try:
+            config = config_loader.load(parsed_args.config)
+        except FileNotFoundError as e:
+            self.logger.error(str(e))
+            return 1
+
+        try:
+            client = LOLBASClient(url=config.lolbas.url, default_json=config.lolbas.json_file)
+            raw_data = client.get_lolbas_data(parsed_args.lolbas_json)
+        except (FileNotFoundError, json.JSONDecodeError, httpx.HTTPError) as e:
+            self.logger.error(f"Failed to load LOLBAS data: {e}")
+            return 1
+
+        lolbas_parser = LOLBASParser()
+        lolbins = lolbas_parser.parse(raw_data)
+
+        try:
+            config_manager = SysmonConfigManager(parsed_args.input)
+            config_manager.load()
+        except etree.XMLSyntaxError as e:
+            self.logger.error(f"Invalid XML in config: {e}")
+            return 1
+
+        config_executables = config_manager.get_all_executables_for_coverage()
+
+        covered: list[str] = []
+        missing: list[str] = []
+
+        for lolbin in lolbins:
+            name_lower = lolbin.name.lower()
+            orig_lower = lolbin.original_filename.lower() if lolbin.original_filename else None
+
+            is_covered = name_lower in config_executables or (orig_lower and orig_lower in config_executables)
+
+            if is_covered:
+                covered.append(lolbin.name)
+            else:
+                missing.append(lolbin.name)
+
+        total = len(lolbins)
+        coverage_pct = (len(covered) / total * 100) if total > 0 else 0
+
+        print("LOLBAS Coverage Report\n")
+        print(f"Total LOLBins in LOLBAS:    {total}")
+        print(f"Covered in config:          {len(covered)}")
+        print(f"Missing from config:        {len(missing)}")
+        print(f"Coverage:                   {coverage_pct:.1f}%")
+
+        if parsed_args.show_covered and covered:
+            print(f"\nCovered LOLBins ({len(covered)})")
+            for name in sorted(covered):
+                print(f"✓ {name}")
+
+        if parsed_args.show_missing and missing:
+            print(f"\nMissing LOLBins ({len(missing)})")
+            for name in sorted(missing):
+                print(f"✗ {name}")
+
+        return 0

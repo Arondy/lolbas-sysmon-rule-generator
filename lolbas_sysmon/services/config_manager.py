@@ -13,7 +13,7 @@ from lxml import etree
 from lolbas_sysmon.config import logger
 
 # Tags that identify executable names in Sysmon rules
-EXECUTABLE_TAGS = {"OriginalFileName", "Image", "SourceImage", "TargetImage"}
+EXECUTABLE_TAGS = {"OriginalFileName", "Image", "SourceImage", "TargetImage", "ParentImage"}
 
 
 class SysmonConfigManager:
@@ -119,6 +119,29 @@ class SysmonConfigManager:
                 parent = elem.getparent()
                 if parent is not None and parent.tag == "Rule":
                     continue
+                if elem.text:
+                    name = elem.text.split("\\")[-1].lower()
+                    executables.add(name)
+
+        return executables
+
+    def get_all_executables_for_coverage(self) -> set[str]:
+        """
+        Get ALL executable names from the config for coverage analysis.
+
+        Unlike get_all_existing_executables, this method includes executables
+        inside compound Rule elements. Use this when you need an exhaustive
+        inventory of executables present in the config.
+
+        Returns:
+            Set of lowercase executable names.
+        """
+        executables: set[str] = set()
+        if self.root is None:
+            return executables
+
+        for tag in EXECUTABLE_TAGS:
+            for elem in self.root.iter(tag):
                 if elem.text:
                     name = elem.text.split("\\")[-1].lower()
                     executables.add(name)
