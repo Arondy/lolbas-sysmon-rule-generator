@@ -148,6 +148,7 @@ class CLI:
         """
         parsed_args = self.parser.parse_args(args)
 
+        # Coverage analysis mode
         if parsed_args.coverage:
             return self._run_coverage_analysis(parsed_args)
 
@@ -179,6 +180,7 @@ class CLI:
                     self.logger.warning(f"Category '{cat}' is not in enabled categories from config")
             config.categories = categories
 
+        # Override unique_rules from CLI if specified
         if parsed_args.unique_rules:
             config.unique_rules = True
 
@@ -301,7 +303,9 @@ class CLI:
         sysmon_config = generator.create_sysmon_config(rule_groups)
         xml_str = generator.to_xml_string(sysmon_config)
 
-        print("GENERATED SYSMON RULES\n")
+        print("\n" + "=" * 60)
+        print("GENERATED SYSMON RULES")
+        print("=" * 60 + "\n")
         print(xml_str)
 
         total_rules = self._count_all_rules(rule_groups)
@@ -464,6 +468,20 @@ class CLI:
 
         config_executables = config_manager.get_all_executables_for_coverage()
 
+        cmd_rules = 0
+        fallback_rules = 0
+        executable_tags = {"OriginalFileName", "Image", "SourceImage", "TargetImage", "ParentImage"}
+
+        for rule in config_manager.root.iter("Rule"):
+            if rule.get("groupRelation") == "and":
+                cmd_rules += 1
+
+        for tag in executable_tags:
+            for elem in config_manager.root.iter(tag):
+                parent = elem.getparent()
+                if parent is not None and parent.tag != "Rule":
+                    fallback_rules += 1
+
         covered: list[str] = []
         missing: list[str] = []
 
@@ -486,6 +504,8 @@ class CLI:
         print(f"Covered in config:          {len(covered)}")
         print(f"Missing from config:        {len(missing)}")
         print(f"Coverage:                   {coverage_pct:.1f}%")
+        print(f"CMD Rules:                  {cmd_rules}")
+        print(f"Fallback rules:             {fallback_rules}")
 
         if parsed_args.show_covered and covered:
             print(f"\nCovered LOLBins ({len(covered)})")
