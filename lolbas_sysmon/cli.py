@@ -126,6 +126,19 @@ class CLI:
             action="store_true",
             help="Show list of LOLBins covered in config (use with --coverage)",
         )
+
+        # Mutually exclusive group for rule type selection
+        rule_type_group = parser.add_mutually_exclusive_group()
+        rule_type_group.add_argument(
+            "--only-cmd",
+            action="store_true",
+            help="Generate only CommandLine rules (more specific)",
+        )
+        rule_type_group.add_argument(
+            "--only-fallback",
+            action="store_true",
+            help="Generate only fallback rules (executable name only)",
+        )
         return parser
 
     def run(self, args: list[str] | None = None) -> int:
@@ -219,7 +232,18 @@ class CLI:
             return 0
 
         generator = SysmonRuleGenerator(config, mitre_technique_names)
-        rule_groups = generator.generate_all_rule_groups(lolbins_by_category)
+
+        # Determine rule type based on CLI flags
+        if parsed_args.only_cmd:
+            rule_type = "cmd"
+            self.logger.info("Generating only CommandLine rules")
+        elif parsed_args.only_fallback:
+            rule_type = "fallback"
+            self.logger.info("Generating only fallback rules")
+        else:
+            rule_type = "both"
+
+        rule_groups = generator.generate_all_rule_groups(lolbins_by_category, rule_type=rule_type)
 
         if parsed_args.dry_run:
             return self._dry_run(rule_groups, generator)

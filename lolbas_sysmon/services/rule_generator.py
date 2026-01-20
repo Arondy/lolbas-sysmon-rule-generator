@@ -250,6 +250,7 @@ class SysmonRuleGenerator:
     def generate_all_rule_groups(
         self,
         lolbins_by_category: dict[str, list[LOLBin]],
+        rule_type: str = "both",
     ) -> list[etree._Element]:
         """
         Generate all rule groups for multiple categories.
@@ -262,6 +263,7 @@ class SysmonRuleGenerator:
 
         Args:
             lolbins_by_category: Dictionary mapping category names to LOLBin lists.
+            rule_type: Type of rules to generate: "cmd", "fallback", or "both".
 
         Returns:
             List of RuleGroup XML elements (CMD groups first, then fallback).
@@ -272,18 +274,20 @@ class SysmonRuleGenerator:
         rule_groups: list[etree._Element] = []
 
         # Generate CommandLine rules first (more specific)
-        for category, lolbins in lolbins_by_category.items():
-            if lolbins:
-                cmd_group = self.generate_rule_group(lolbins, category, with_cmdline=True)
-                if cmd_group is not None:
-                    rule_groups.append(cmd_group)
+        if rule_type in ("cmd", "both"):
+            for category, lolbins in lolbins_by_category.items():
+                if lolbins:
+                    cmd_group = self.generate_rule_group(lolbins, category, with_cmdline=True)
+                    if cmd_group is not None:
+                        rule_groups.append(cmd_group)
 
         # Generate fallback rules second
-        for category, lolbins in lolbins_by_category.items():
-            if lolbins:
-                fallback_group = self.generate_rule_group(lolbins, category, with_cmdline=False)
-                if fallback_group is not None:
-                    rule_groups.append(fallback_group)
+        if rule_type in ("fallback", "both"):
+            for category, lolbins in lolbins_by_category.items():
+                if lolbins:
+                    fallback_group = self.generate_rule_group(lolbins, category, with_cmdline=False)
+                    if fallback_group is not None:
+                        rule_groups.append(fallback_group)
 
         return rule_groups
 
