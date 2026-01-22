@@ -139,6 +139,11 @@ class CLI:
             action="store_true",
             help="Generate only fallback rules (executable name only)",
         )
+        parser.add_argument(
+            "--update-data",
+            action="store_true",
+            help="Force re-download of LOLBAS and MITRE data from URLs",
+        )
         return parser
 
     def run(self, args: list[str] | None = None) -> int:
@@ -201,11 +206,19 @@ class CLI:
         if config.unique_rules:
             self.logger.info("Unique rules mode enabled: skipping duplicates")
 
-        mitre_technique_names = self._load_mitre_data(config, parsed_args.mitre_json)
+        # Handle --update-data flag
+        force_update = parsed_args.update_data
+        if force_update:
+            self.logger.info("Force update mode: re-downloading LOLBAS and MITRE data")
+
+        mitre_technique_names = self._load_mitre_data(config, parsed_args.mitre_json, force_update)
 
         try:
             client = LOLBASClient(url=config.lolbas.url, default_json=config.lolbas.json_file)
-            raw_data = client.get_lolbas_data(parsed_args.lolbas_json)
+            if force_update:
+                raw_data = client.fetch_lolbas_data(save_path=config.lolbas.json_file)
+            else:
+                raw_data = client.get_lolbas_data(parsed_args.lolbas_json)
         except FileNotFoundError as e:
             self.logger.error(f"LOLBAS JSON file not found: {e}")
             return 1
@@ -263,6 +276,7 @@ class CLI:
         self,
         config: Config,
         mitre_json_arg: str | None,
+        force_update: bool = False,
     ) -> dict[str, str]:
         """
         Load MITRE ATT&CK technique names mapping.
@@ -273,11 +287,19 @@ class CLI:
         Args:
             config: Application configuration with MITRE settings.
             mitre_json_arg: Optional custom path to MITRE JSON file.
+            force_update: If True, force re-download from URL.
 
         Returns:
             Dictionary mapping technique IDs to human-readable names.
         """
         mitre_client = MitreClient(url=config.mitre.url, default_json=config.mitre.json_file)
+
+        if force_update:
+            try:
+                return mitre_client.fetch_from_url(save_path=config.mitre.json_file)
+            except httpx.HTTPError as e:
+                self.logger.warning(f"Failed to fetch MITRE data: {e}, using technique IDs as names")
+                return {}
 
         if mitre_json_arg:
             custom_path = mitre_json_arg

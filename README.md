@@ -124,6 +124,11 @@ python -m lolbas_sysmon --coverage -i sysmonconfig.xml --show-covered --show-mis
 python -m lolbas_sysmon -c my_config.toml
 ```
 
+**Force update LOLBAS and MITRE data:**
+```bash
+python -m lolbas_sysmon --update-data
+```
+
 ### Docker Usage
 
 Build image:
@@ -233,14 +238,14 @@ Generated rules follow Sysmon XML schema:
     <RuleGroup name="LOLBAS_CMD_Execute" groupRelation="or">
       <ProcessCreate onmatch="include">
         <!-- Download and execute a remote XSL script -->
-        <Rule groupRelation="and" 
+        <Rule groupRelation="and"
               name="technique_id=T1220,technique_name=XSL Script Processing">
           <OriginalFileName condition="is">wmic.exe</OriginalFileName>
           <CommandLine condition="contains any">/format</CommandLine>
         </Rule>
       </ProcessCreate>
     </RuleGroup>
-    
+
     <!-- Fallback rules (broader detection) -->
     <RuleGroup name="LOLBAS_Execute" groupRelation="or">
       <ProcessCreate onmatch="include">

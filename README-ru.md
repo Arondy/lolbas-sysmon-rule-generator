@@ -124,6 +124,11 @@ python -m lolbas_sysmon --coverage -i sysmonconfig.xml --show-covered --show-mis
 python -m lolbas_sysmon -c my_config.toml
 ```
 
+**Принудительное обновление данных LOLBAS и MITRE:**
+```bash
+python -m lolbas_sysmon --update-data
+```
+
 ### Использование Docker
 
 Сборка образа:
@@ -233,14 +238,14 @@ url = "https://raw.githubusercontent.com/mitre/cti/master/enterprise-attack/ente
     <RuleGroup name="LOLBAS_CMD_Execute" groupRelation="or">
       <ProcessCreate onmatch="include">
         <!-- Загрузка и выполнение удалённого XSL-скрипта -->
-        <Rule groupRelation="and" 
+        <Rule groupRelation="and"
               name="technique_id=T1220,technique_name=XSL Script Processing">
           <OriginalFileName condition="is">wmic.exe</OriginalFileName>
           <CommandLine condition="contains any">/format</CommandLine>
         </Rule>
       </ProcessCreate>
     </RuleGroup>
-    
+
     <!-- Fallback правила (более широкое обнаружение) -->
     <RuleGroup name="LOLBAS_Execute" groupRelation="or">
       <ProcessCreate onmatch="include">
@@ -266,7 +271,7 @@ url = "https://raw.githubusercontent.com/mitre/cti/master/enterprise-attack/ente
    - Создаёт fallback правила (только имя executable/OriginalFileName)
 
    > **Ограничение схемы Sysmon:** Поле CommandLine доступно только в событиях ProcessCreate. Для категорий, сопоставленных с FileCreate или ProcessAccess, генерируются только fallback правила.
-   
+
 4. **Обогащение MITRE** — Добавляет `technique_id` и `technique_name` в атрибуты правил
 
 5. **Вывод** — Сохраняет standalone XML или объединяет с существующей конфигурацией Sysmon
