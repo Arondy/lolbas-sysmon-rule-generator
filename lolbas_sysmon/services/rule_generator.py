@@ -11,8 +11,11 @@ When unique_rules mode is enabled, duplicate rules are skipped:
 - Fallback rules: deduplicated by (executable, event_type)
 
 Note: CommandLine rules are only generated for event types that support
-the CommandLine field (ProcessCreate). Other event types like FileCreate
-and ProcessAccess do not have CommandLine and only get fallback rules.
+the CommandLine field (ProcessCreate). Other event types like FileCreate,
+ProcessAccess, NetworkConnect, and ImageLoad do not have CommandLine
+and only get fallback rules.
+
+ImageLoad rules are only generated for LOLBins with .dll extension.
 """
 
 from lxml import etree
@@ -20,11 +23,11 @@ from lxml import etree
 from lolbas_sysmon.config import Config, logger
 from lolbas_sysmon.models import LOLBin, MitreInfo
 
-# Sysmon event types that support CommandLine field (Schema 4.90)
-# ProcessCreate (Event ID 1) - has CommandLine
-# ProcessAccess (Event ID 10) - NO CommandLine
-# FileCreate (Event ID 11) - NO CommandLine
+# Event types that support CommandLine field
 CMDLINE_SUPPORTED_EVENTS = {"ProcessCreate"}
+
+# Event types that require DLL-only LOLBins
+DLL_ONLY_EVENTS = {"ImageLoad"}
 
 
 class SysmonRuleGenerator:
@@ -35,6 +38,9 @@ class SysmonRuleGenerator:
     Supports both CommandLine-based rules (more specific) and fallback
     rules (executable name only). Includes MITRE ATT&CK technique
     annotations in rule attributes.
+
+    Supports multiple event types per category (ProcessCreate, NetworkConnect,
+    ImageLoad, etc.). ImageLoad rules are only generated for DLL-based LOLBins.
 
     When unique_rules is enabled, tracks generated rules to skip duplicates
     across different categories within the same event type.
@@ -75,22 +81,35 @@ class SysmonRuleGenerator:
         self._generated_cmd_rules.clear()
         self._generated_fallback_rules.clear()
 
-    def _get_executable_key(self, lolbin: LOLBin, category: str) -> str:
+    def _is_dll(self, lolbin: LOLBin) -> bool:
+        """
+        Check if LOLBin is a DLL file.
+
+        Args:
+            lolbin: LOLBin object.
+
+        Returns:
+            True if the LOLBin name ends with .dll (case-insensitive).
+        """
+        return lolbin.name.lower().endswith(".dll")
+
+    def _get_executable_key(self, lolbin: LOLBin, event_type: str) -> str:
         """
         Get a normalized key for the executable.
 
         Args:
             lolbin: LOLBin object.
-            category: Category for determining event type and condition tags.
+            event_type: Sysmon event type for determining condition tags.
 
         Returns:
             Normalized lowercase key like "originalfilename:cmd.exe" or "image:\\cmd.exe"
         """
-        event_type = self.config.get_event_type(category)
         preferred_tag, fallback_tag = self.config.get_condition_tags(event_type)
 
         if preferred_tag == "OriginalFileName" and lolbin.original_filename:
             return f"originalfilename:{lolbin.original_filename.lower()}"
+        elif preferred_tag == "ImageLoaded":
+            return f"imageloaded:\\{lolbin.name.lower()}"
         else:
             tag_name = fallback_tag if preferred_tag == "OriginalFileName" else preferred_tag
             if tag_name is None:
@@ -149,7 +168,7 @@ class SysmonRuleGenerator:
         Check if event type supports CommandLine conditions.
 
         Only ProcessCreate (Event ID 1) supports CommandLine in Sysmon.
-        FileCreate (Event ID 11) and ProcessAccess (Event ID 10) do not.
+        FileCreate, ProcessAccess, NetworkConnect, ImageLoad do not.
 
         Args:
             event_type: Sysmon event type name.
@@ -158,6 +177,38 @@ class SysmonRuleGenerator:
             True if CommandLine rules can be generated for this event type.
         """
         return event_type in CMDLINE_SUPPORTED_EVENTS
+
+    def _requires_dll_only(self, event_type: str) -> bool:
+        """
+        Check if event type only applies to DLL LOLBins.
+
+        ImageLoad events should only be generated for .dll files.
+
+        Args:
+            event_type: Sysmon event type name.
+
+        Returns:
+            True if only DLL LOLBins should be used.
+        """
+        return event_type in DLL_ONLY_EVENTS
+
+    def _filter_lolbins_for_event_type(self, lolbins: list[LOLBin], event_type: str) -> list[LOLBin]:
+        """
+        Filter LOLBins applicable for a specific event type.
+
+        For ImageLoad, only return DLL-based LOLBins.
+        For other event types, return all LOLBins.
+
+        Args:
+            lolbins: List of LOLBin objects.
+            event_type: Sysmon event type.
+
+        Returns:
+            Filtered list of LOLBins.
+        """
+        if self._requires_dll_only(event_type):
+            return [lb for lb in lolbins if self._is_dll(lb)]
+        return lolbins
 
     def generate_rule_group(
         self,
@@ -170,6 +221,8 @@ class SysmonRuleGenerator:
 
         Creates either CommandLine-based rules (more specific matching)
         or fallback rules (executable name only) based on with_cmdline flag.
+        Supports multiple event types per category, creating separate event
+        sections within the same RuleGroup.
 
         When unique_rules is enabled, skips rules that were already generated
         for the same executable within the same event type.
@@ -183,67 +236,76 @@ class SysmonRuleGenerator:
             RuleGroup XML element, or None if no rules were generated.
         """
         group_name = self.config.get_rule_group_name(category, with_cmdline)
-        event_type = self.config.get_event_type(category)
+        event_types = self.config.get_event_types(category)
         unique_rules = self.config.unique_rules
 
-        # Skip CMD rules for event types that don't support CommandLine
-        if with_cmdline and not self._supports_commandline(event_type):
-            self.logger.debug(f"Skipping CMD rules for category '{category}': {event_type} does not support CommandLine")
-            return None
-
         rule_group = etree.Element("RuleGroup", name=group_name, groupRelation="or")
-        event_element = etree.SubElement(rule_group, event_type, onmatch="include")
+        total_rules_added = 0
 
-        rules_added = 0
-        rules_skipped = 0
+        for event_type in event_types:
+            if with_cmdline and not self._supports_commandline(event_type):
+                self.logger.debug(f"Skipping CMD rules for category '{category}' event '{event_type}': does not support CommandLine")
+                continue
 
-        for lolbin in lolbins:
-            executable_key = self._get_executable_key(lolbin, category)
-            rule_element = None  # Reset for each iteration
+            # Filter LOLBins for this event type (e.g., DLLs only for ImageLoad)
+            filtered_lolbins = self._filter_lolbins_for_event_type(lolbins, event_type)
+            if not filtered_lolbins:
+                continue
 
-            if with_cmdline:
-                flags = lolbin.get_command_flags_for_category(category)
-                if not flags:
-                    continue
+            event_element = etree.SubElement(rule_group, event_type, onmatch="include")
+            rules_added = 0
+            rules_skipped = 0
 
-                flags_key = self._get_flags_key(flags)
+            for lolbin in filtered_lolbins:
+                executable_key = self._get_executable_key(lolbin, event_type)
+                rule_element = None
 
-                # Check for duplicate if unique_rules enabled
-                if unique_rules and self._is_cmd_rule_duplicate(executable_key, event_type, flags_key):
-                    self.logger.debug(f"Skipping duplicate CMD rule: {lolbin.name} (event_type={event_type}, flags={flags_key})")
-                    rules_skipped += 1
-                    continue
+                if with_cmdline:
+                    flags = lolbin.get_command_flags_for_category(category)
+                    if not flags:
+                        continue
 
-                rule_element = self._generate_cmdline_rule(lolbin, category)
-                if rule_element is not None and unique_rules:
-                    self._mark_cmd_rule_generated(executable_key, event_type, flags_key)
+                    flags_key = self._get_flags_key(flags)
+
+                    if unique_rules and self._is_cmd_rule_duplicate(executable_key, event_type, flags_key):
+                        self.logger.debug(f"Skipping duplicate CMD rule: {lolbin.name} (event_type={event_type}, flags={flags_key})")
+                        rules_skipped += 1
+                        continue
+
+                    rule_element = self._generate_cmdline_rule(lolbin, category, event_type)
+                    if rule_element is not None and unique_rules:
+                        self._mark_cmd_rule_generated(executable_key, event_type, flags_key)
+                else:
+                    if unique_rules and self._is_fallback_rule_duplicate(executable_key, event_type):
+                        self.logger.debug(f"Skipping duplicate fallback rule: {lolbin.name} (event_type={event_type})")
+                        rules_skipped += 1
+                        continue
+
+                    rule_element = self._generate_fallback_rule(lolbin, category, event_type)
+                    if rule_element is not None and unique_rules:
+                        self._mark_fallback_rule_generated(executable_key, event_type)
+
+                if rule_element is not None:
+                    description = lolbin.get_description_for_category(category)
+                    if description:
+                        comment = etree.Comment(f" {self._sanitize_comment(description)} ")
+                        event_element.append(comment)
+                    event_element.append(rule_element)
+                    rules_added += 1
+
+            # Remove empty event element
+            if rules_added == 0:
+                rule_group.remove(event_element)
             else:
-                # Fallback rule
-                if unique_rules and self._is_fallback_rule_duplicate(executable_key, event_type):
-                    self.logger.debug(f"Skipping duplicate fallback rule: {lolbin.name} (event_type={event_type})")
-                    rules_skipped += 1
-                    continue
+                total_rules_added += rules_added
+                rule_type = "CommandLine" if with_cmdline else "fallback"
+                log_msg = f"Generated {event_type} section for '{group_name}' with {rules_added} {rule_type} rules"
+                if rules_skipped > 0:
+                    log_msg += f" ({rules_skipped} duplicates skipped)"
+                self.logger.debug(log_msg)
 
-                rule_element = self._generate_fallback_rule(lolbin, category)
-                if rule_element is not None and unique_rules:
-                    self._mark_fallback_rule_generated(executable_key, event_type)
-
-            if rule_element is not None:
-                description = lolbin.get_description_for_category(category)
-                if description:
-                    comment = etree.Comment(f" {self._sanitize_comment(description)} ")
-                    event_element.append(comment)
-                event_element.append(rule_element)
-                rules_added += 1
-
-        if rules_added == 0:
+        if total_rules_added == 0:
             return None
-
-        rule_type = "CommandLine" if with_cmdline else "fallback"
-        log_msg = f"Generated RuleGroup '{group_name}' ({event_type}, {rule_type}) with {rules_added} rules"
-        if rules_skipped > 0:
-            log_msg += f" ({rules_skipped} duplicates skipped)"
-        self.logger.debug(log_msg)
 
         return rule_group
 
@@ -268,7 +330,6 @@ class SysmonRuleGenerator:
         Returns:
             List of RuleGroup XML elements (CMD groups first, then fallback).
         """
-        # Reset trackers at the start of generation
         self._reset_trackers()
 
         rule_groups: list[etree._Element] = []
@@ -312,26 +373,30 @@ class SysmonRuleGenerator:
 
         return sysmon
 
-    def _generate_fallback_rule(self, lolbin: LOLBin, category: str) -> etree._Element | None:
+    def _generate_fallback_rule(self, lolbin: LOLBin, category: str, event_type: str) -> etree._Element | None:
         """
         Generate a fallback rule matching only executable name.
 
         Uses OriginalFileName if available (more reliable), otherwise
-        falls back to Image path matching.
+        falls back to Image path matching. For ImageLoad events, uses
+        ImageLoaded tag.
 
         Args:
             lolbin: LOLBin object to generate rule for.
             category: LOLBAS category for MITRE mapping.
+            event_type: Sysmon event type for determining condition tags.
 
         Returns:
             XML element for the detection rule.
         """
-        event_type = self.config.get_event_type(category)
         preferred_tag, fallback_tag = self.config.get_condition_tags(event_type)
 
         if preferred_tag == "OriginalFileName" and lolbin.original_filename:
             rule = etree.Element("OriginalFileName", condition="is")
             rule.text = lolbin.original_filename
+        elif preferred_tag == "ImageLoaded":
+            rule = etree.Element("ImageLoaded", condition="end with")
+            rule.text = f"\\{lolbin.name}"
         elif preferred_tag in ("SourceImage", "Image") or fallback_tag:
             tag_name = fallback_tag if preferred_tag == "OriginalFileName" else preferred_tag
             if tag_name is None:
@@ -348,7 +413,7 @@ class SysmonRuleGenerator:
 
         return rule
 
-    def _generate_cmdline_rule(self, lolbin: LOLBin, category: str) -> etree._Element | None:
+    def _generate_cmdline_rule(self, lolbin: LOLBin, category: str, event_type: str) -> etree._Element | None:
         """
         Generate a CommandLine rule with executable + flag matching.
 
@@ -359,6 +424,7 @@ class SysmonRuleGenerator:
         Args:
             lolbin: LOLBin object to generate rule for.
             category: LOLBAS category for flag extraction and MITRE mapping.
+            event_type: Sysmon event type for determining condition tags.
 
         Returns:
             Rule XML element, or None if no flags found for category.
@@ -367,7 +433,6 @@ class SysmonRuleGenerator:
         if not flags:
             return None
 
-        event_type = self.config.get_event_type(category)
         preferred_tag, fallback_tag = self.config.get_condition_tags(event_type)
 
         rule = etree.Element("Rule", groupRelation="and")

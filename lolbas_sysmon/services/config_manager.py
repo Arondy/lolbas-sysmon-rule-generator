@@ -13,7 +13,7 @@ from lxml import etree
 from lolbas_sysmon.config import logger
 
 # Tags that identify executable names in Sysmon rules
-EXECUTABLE_TAGS = {"OriginalFileName", "Image", "SourceImage", "TargetImage", "ParentImage"}
+EXECUTABLE_TAGS = {"OriginalFileName", "Image", "SourceImage", "TargetImage", "ParentImage", "ImageLoaded"}
 
 
 class SysmonConfigManager:
