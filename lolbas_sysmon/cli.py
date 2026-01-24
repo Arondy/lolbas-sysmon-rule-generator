@@ -16,6 +16,7 @@ from lxml import etree
 from lolbas_sysmon.config import Config, ConfigLoader, logger
 from lolbas_sysmon.config.settings import DEFAULT_OUTPUT_FILE
 from lolbas_sysmon.services import (
+    EXECUTABLE_TAGS,
     LOLBASClient,
     LOLBASParser,
     MitreClient,
@@ -127,7 +128,6 @@ class CLI:
             help="Show list of LOLBins covered in config (use with --coverage)",
         )
 
-        # Mutually exclusive group for rule type selection
         rule_type_group = parser.add_mutually_exclusive_group()
         rule_type_group.add_argument(
             "--only-cmd",
@@ -166,7 +166,6 @@ class CLI:
         """
         parsed_args = self.parser.parse_args(args)
 
-        # Coverage analysis mode
         if parsed_args.coverage:
             return self._run_coverage_analysis(parsed_args)
 
@@ -206,7 +205,6 @@ class CLI:
         if config.unique_rules:
             self.logger.info("Unique rules mode enabled: skipping duplicates")
 
-        # Handle --update-data flag
         force_update = parsed_args.update_data
         if force_update:
             self.logger.info("Force update mode: re-downloading LOLBAS and MITRE data")
@@ -516,13 +514,12 @@ class CLI:
 
         cmd_rules = 0
         fallback_rules = 0
-        executable_tags = {"OriginalFileName", "Image", "SourceImage", "TargetImage", "ParentImage"}
 
         for rule in config_manager.root.iter("Rule"):
             if rule.get("groupRelation") == "and":
                 cmd_rules += 1
 
-        for tag in executable_tags:
+        for tag in EXECUTABLE_TAGS:
             for elem in config_manager.root.iter(tag):
                 parent = elem.getparent()
                 if parent is not None and parent.tag != "Rule":
