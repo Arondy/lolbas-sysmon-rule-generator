@@ -23,7 +23,7 @@ class MitreConfig:
 @dataclass
 class Config:
     categories: list[str] = field(default_factory=list)
-    mappings: dict[str, str] = field(default_factory=dict)
+    mappings: dict[str, list[str]] = field(default_factory=dict)
     event_conditions: dict[str, list[str]] = field(default_factory=dict)
     rule_group_prefix: str = "LOLBAS_"
     rule_group_cmd_prefix: str = "LOLBAS_CMD_"
@@ -31,8 +31,9 @@ class Config:
     lolbas: LolbasConfig = field(default_factory=LolbasConfig)
     mitre: MitreConfig = field(default_factory=MitreConfig)
 
-    def get_event_type(self, category: str) -> str:
-        return self.mappings.get(category, "ProcessCreate")
+    def get_event_types(self, category: str) -> list[str]:
+        """Get all event types for a category."""
+        return self.mappings.get(category, ["ProcessCreate"])
 
     def get_rule_group_name(self, category: str, with_cmdline: bool = False) -> str:
         prefix = self.rule_group_cmd_prefix if with_cmdline else self.rule_group_prefix

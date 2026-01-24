@@ -48,28 +48,32 @@ enabled = [
 
 [mappings]
 # Category to Sysmon Event Type Mapping.
-# Maps each LOLBAS category to the appropriate Sysmon event type for detection.
+# Maps each LOLBAS category to one or more Sysmon event types for detection.
 #
 # Sysmon Event Types used:
 #   ProcessCreate  - Event ID 1: Process creation with command line
-#   FileCreate     - Event ID 11: File creation
+#   NetworkConnect - Event ID 3: Network connection
+#   ImageLoad      - Event ID 7: Image/DLL loaded (for DLL-based LOLBins)
 #   ProcessAccess  - Event ID 10: Process access (e.g., credential dumping)
+#   FileCreate     - Event ID 11: File creation
+#
+# Note: ImageLoad rules are only generated for LOLBins with .dll extension
 
-"ADS" = "FileCreate"
-"AWL Bypass" = "ProcessCreate"
-"Compile" = "ProcessCreate"
-"Conceal" = "ProcessCreate"
-"Copy" = "FileCreate"
-"Credentials" = "ProcessAccess"
-"Decode" = "FileCreate"
-"Download" = "ProcessCreate"
-"Dump" = "ProcessAccess"
-"Encode" = "FileCreate"
-"Execute" = "ProcessCreate"
-"Reconnaissance" = "ProcessCreate"
-"Tamper" = "ProcessCreate"
-"UAC Bypass" = "ProcessCreate"
-"Upload" = "ProcessCreate"
+"ADS" = ["FileCreate"]
+"AWL Bypass" = ["ProcessCreate", "ImageLoad"]
+"Compile" = ["ProcessCreate"]
+"Conceal" = ["ProcessCreate"]
+"Copy" = ["FileCreate"]
+"Credentials" = ["ProcessAccess"]
+"Decode" = ["FileCreate"]
+"Download" = ["ProcessCreate", "NetworkConnect"]
+"Dump" = ["ProcessAccess", "ImageLoad"]
+"Encode" = ["FileCreate"]
+"Execute" = ["ProcessCreate", "ImageLoad"]
+"Reconnaissance" = ["ProcessCreate", "NetworkConnect"]
+"Tamper" = ["ProcessCreate"]
+"UAC Bypass" = ["ProcessCreate"]
+"Upload" = ["ProcessCreate", "NetworkConnect"]
 
 [event_conditions]
 # Preferred Condition Tags by Event Type.
@@ -79,11 +83,14 @@ enabled = [
 # Tag types:
 #   OriginalFileName - PE header original filename (harder to spoof)
 #   Image            - Full executable path
+#   ImageLoaded      - Loaded DLL path (for ImageLoad events)
 #   SourceImage      - Source process in ProcessAccess events
 #
 # Using OriginalFileName is preferred as it's more resistant to renaming attacks.
 
 ProcessCreate = ["OriginalFileName", "Image"]
+NetworkConnect = ["Image"]
+ImageLoad = ["ImageLoaded", "Image"]
 ProcessAccess = ["SourceImage", "Image"]
 FileCreate = ["Image"]
 
