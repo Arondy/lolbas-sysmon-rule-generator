@@ -18,26 +18,28 @@ class TestConfig:
         return Config(
             categories=["Execute", "Download", "Dump"],
             mappings={
-                "Execute": "ProcessCreate",
-                "Download": "ProcessCreate",
-                "Dump": "ProcessAccess",
+                "Execute": ["ProcessCreate"],
+                "Download": ["ProcessCreate", "NetworkConnect"],
+                "Dump": ["ProcessAccess"],
             },
             event_conditions={
                 "ProcessCreate": ["OriginalFileName", "Image"],
                 "ProcessAccess": ["SourceImage", "Image"],
+                "NetworkConnect": ["Image"],
             },
             rule_group_prefix="LOLBAS_",
             rule_group_cmd_prefix="LOLBAS_CMD_",
         )
 
-    def test_get_event_type(self, config):
-        """Test getting event type for category."""
-        assert config.get_event_type("Execute") == "ProcessCreate"
-        assert config.get_event_type("Dump") == "ProcessAccess"
+    def test_get_event_types(self, config):
+        """Test getting event types for category."""
+        assert config.get_event_types("Execute") == ["ProcessCreate"]
+        assert config.get_event_types("Download") == ["ProcessCreate", "NetworkConnect"]
+        assert config.get_event_types("Dump") == ["ProcessAccess"]
 
-    def test_get_event_type_default(self, config):
+    def test_get_event_types_default(self, config):
         """Test default event type for unknown category."""
-        assert config.get_event_type("Unknown") == "ProcessCreate"
+        assert config.get_event_types("Unknown") == ["ProcessCreate"]
 
     def test_get_rule_group_name_fallback(self, config):
         """Test rule group name for fallback rules."""
@@ -90,8 +92,8 @@ class TestConfigLoader:
 enabled = ["Execute", "Download"]
 
 [mappings]
-"Execute" = "ProcessCreate"
-"Download" = "ProcessCreate"
+"Execute" = ["ProcessCreate"]
+"Download" = ["ProcessCreate", "NetworkConnect"]
 
 [event_conditions]
 ProcessCreate = ["OriginalFileName", "Image"]
@@ -120,7 +122,8 @@ url = "https://example.com/mitre.json"
             config = loader.load(temp_path)
 
             assert config.categories == ["Execute", "Download"]
-            assert config.mappings["Execute"] == "ProcessCreate"
+            assert config.mappings["Execute"] == ["ProcessCreate"]
+            assert config.mappings["Download"] == ["ProcessCreate", "NetworkConnect"]
             assert config.rule_group_prefix == "TEST_"
             assert config.rule_group_cmd_prefix == "TEST_CMD_"
             assert config.unique_rules is True

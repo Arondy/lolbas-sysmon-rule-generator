@@ -100,11 +100,12 @@ def sample_config_toml():
     """Sample config.toml content."""
     return """
 [categories]
-enabled = ["Download", "Execute"]
+enabled = ["Download", "Execute", "Decode"]
 
 [mappings]
-"Download" = "ProcessCreate"
-"Execute" = "ProcessCreate"
+"Download" = ["ProcessCreate"]
+"Execute" = ["ProcessCreate"]
+"Decode" = ["ProcessCreate"]
 
 [event_conditions]
 ProcessCreate = ["OriginalFileName", "Image"]

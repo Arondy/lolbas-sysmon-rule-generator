@@ -56,7 +56,7 @@ def sample_config():
     """Sample configuration."""
     return Config(
         categories=["Download"],
-        mappings={"Download": "ProcessCreate"},
+        mappings={"Download": ["ProcessCreate"]},
         event_conditions={"ProcessCreate": ["OriginalFileName", "Image"]},
         rule_group_prefix="LOLBAS_",
         rule_group_cmd_prefix="LOLBAS_CMD_",
@@ -247,8 +247,8 @@ class TestConfigLoaderIntegration:
 enabled = ["Execute", "Download"]
 
 [mappings]
-"Execute" = "ProcessCreate"
-"Download" = "ProcessCreate"
+"Execute" = ["ProcessCreate"]
+"Download" = ["ProcessCreate", "NetworkConnect"]
 
 [event_conditions]
 ProcessCreate = ["OriginalFileName", "Image"]

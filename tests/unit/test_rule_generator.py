@@ -16,8 +16,8 @@ class TestSysmonRuleGenerator:
         return Config(
             categories=["Execute", "Download"],
             mappings={
-                "Execute": "ProcessCreate",
-                "Download": "ProcessCreate",
+                "Execute": ["ProcessCreate"],
+                "Download": ["ProcessCreate"],
             },
             event_conditions={
                 "ProcessCreate": ["OriginalFileName", "Image"],
@@ -61,7 +61,10 @@ class TestSysmonRuleGenerator:
         rule_group = generator.generate_rule_group([sample_lolbin], "Download", with_cmdline=False)
 
         assert rule_group is not None
-        rule = rule_group.find(".//OriginalFileName")
+
+        process_create = rule_group.find("ProcessCreate")
+        assert process_create is not None
+        rule = process_create.find("OriginalFileName")
         assert rule is not None
         assert rule.text == "CertUtil.exe"
         assert rule.get("condition") == "is"
@@ -71,7 +74,9 @@ class TestSysmonRuleGenerator:
         rule_group = generator.generate_rule_group([lolbin_without_original], "Execute", with_cmdline=False)
 
         assert rule_group is not None
-        rule = rule_group.find(".//Image")
+        process_create = rule_group.find("ProcessCreate")
+        assert process_create is not None
+        rule = process_create.find("Image")
         assert rule is not None
         assert rule.text == "\\evil.exe"
         assert rule.get("condition") == "end with"
@@ -81,7 +86,9 @@ class TestSysmonRuleGenerator:
         rule_group = generator.generate_rule_group([sample_lolbin], "Download", with_cmdline=True)
 
         assert rule_group is not None
-        rule = rule_group.find(".//Rule")
+        process_create = rule_group.find("ProcessCreate")
+        assert process_create is not None
+        rule = process_create.find("Rule")
         assert rule is not None
         assert rule.get("groupRelation") == "and"
 
@@ -108,6 +115,8 @@ class TestSysmonRuleGenerator:
         fallback_group = generator.generate_rule_group([sample_lolbin], "Download", with_cmdline=False)
         cmd_group = generator.generate_rule_group([sample_lolbin], "Download", with_cmdline=True)
 
+        assert fallback_group is not None
+        assert cmd_group is not None
         assert fallback_group.get("name") == "LOLBAS_Download"
         assert cmd_group.get("name") == "LOLBAS_CMD_Download"
 
@@ -115,6 +124,7 @@ class TestSysmonRuleGenerator:
         """Test RuleGroup uses correct event type."""
         rule_group = generator.generate_rule_group([sample_lolbin], "Download", with_cmdline=False)
 
+        assert rule_group is not None
         process_create = rule_group.find("ProcessCreate")
         assert process_create is not None
         assert process_create.get("onmatch") == "include"
@@ -125,7 +135,11 @@ class TestSysmonRuleGenerator:
         generator.mitre_technique_names = technique_names
 
         rule_group = generator.generate_rule_group([sample_lolbin], "Download", with_cmdline=False)
-        rule = rule_group.find(".//OriginalFileName")
+        assert rule_group is not None
+        process_create = rule_group.find("ProcessCreate")
+        assert process_create is not None
+        rule = process_create.find("OriginalFileName")
+        assert rule is not None
 
         name_attr = rule.get("name")
         assert "technique_id=T1105" in name_attr
@@ -136,7 +150,6 @@ class TestSysmonRuleGenerator:
         lolbins_by_category = {"Download": [sample_lolbin]}
         rule_groups = generator.generate_all_rule_groups(lolbins_by_category)
 
-        # Should have CMD group first, then fallback
         assert len(rule_groups) == 2
         assert "CMD" in rule_groups[0].get("name")
         assert "CMD" not in rule_groups[1].get("name")
@@ -144,6 +157,7 @@ class TestSysmonRuleGenerator:
     def test_create_sysmon_config(self, generator, sample_lolbin):
         """Test creating complete Sysmon config."""
         rule_group = generator.generate_rule_group([sample_lolbin], "Download", with_cmdline=False)
+        assert rule_group is not None
         sysmon_config = generator.create_sysmon_config([rule_group])
 
         assert sysmon_config.tag == "Sysmon"
@@ -156,6 +170,7 @@ class TestSysmonRuleGenerator:
     def test_to_xml_string(self, generator, sample_lolbin):
         """Test XML string generation."""
         rule_group = generator.generate_rule_group([sample_lolbin], "Download", with_cmdline=False)
+        assert rule_group is not None
         sysmon_config = generator.create_sysmon_config([rule_group])
 
         xml_str = generator.to_xml_string(sysmon_config)
@@ -181,8 +196,8 @@ class TestUniqueRulesDeduplication:
         return Config(
             categories=["Execute", "Download"],
             mappings={
-                "Execute": "ProcessCreate",
-                "Download": "ProcessCreate",
+                "Execute": ["ProcessCreate"],
+                "Download": ["ProcessCreate"],
             },
             event_conditions={
                 "ProcessCreate": ["OriginalFileName", "Image"],
@@ -217,7 +232,6 @@ class TestUniqueRulesDeduplication:
 
         rule_groups = generator_unique.generate_all_rule_groups(lolbins_by_category)
 
-        # Count fallback rules for test.exe
         fallback_count = 0
         for rg in rule_groups:
             if "CMD" not in rg.get("name", ""):
@@ -225,7 +239,7 @@ class TestUniqueRulesDeduplication:
                     if rule.text == "test.exe":
                         fallback_count += 1
 
-        assert fallback_count == 1  # Should only appear once
+        assert fallback_count == 1
 
     def test_cmd_rules_with_different_flags_not_deduplicated(self, generator_unique):
         """Test CMD rules with different flags are NOT deduplicated."""
@@ -247,14 +261,12 @@ class TestUniqueRulesDeduplication:
 
         rule_groups = generator_unique.generate_all_rule_groups(lolbins_by_category)
 
-        # Count CMD rules for cmd.exe
         cmd_count = 0
         for rg in rule_groups:
             if "CMD" in rg.get("name", ""):
                 for _rule in rg.iter("Rule"):
                     cmd_count += 1
 
-        # Both should exist because flags are different (/c vs /k)
         assert cmd_count == 2
 
     def test_cmd_rules_with_same_flags_deduplicated(self, generator_unique):
@@ -277,12 +289,10 @@ class TestUniqueRulesDeduplication:
 
         rule_groups = generator_unique.generate_all_rule_groups(lolbins_by_category)
 
-        # Count CMD rules for cmd.exe
         cmd_count = 0
         for rg in rule_groups:
             if "CMD" in rg.get("name", ""):
                 for _rule in rg.iter("Rule"):
                     cmd_count += 1
 
-        # Only one should exist because flags are the same (/c)
         assert cmd_count == 1
