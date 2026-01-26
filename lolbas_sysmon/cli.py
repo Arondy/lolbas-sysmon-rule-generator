@@ -463,6 +463,17 @@ class CLI:
                     total += len([c for c in child if isinstance(c.tag, str)])
         return total
 
+    @staticmethod
+    def __is_counted_rule(elem_text: str, lolbas_names: set[str]) -> int:
+        exec_name = elem_text.split("\\")[-1].lower()
+        if ";" in exec_name:
+            exec_names = exec_name.split(";")
+            if any(x in lolbas_names for x in exec_names):
+                return 1
+        elif exec_name in lolbas_names:
+            return 1
+        return 0
+
     def _run_coverage_analysis(self, parsed_args) -> int:
         """
         Run LOLBAS coverage analysis on existing Sysmon config.
@@ -512,18 +523,29 @@ class CLI:
 
         config_executables = config_manager.get_all_executables_for_coverage()
 
+        lolbas_names: set[str] = set()
+        for lolbin in lolbins:
+            lolbas_names.add(lolbin.name.lower())
+            if lolbin.original_filename:
+                lolbas_names.add(lolbin.original_filename.lower())
+
         cmd_rules = 0
         fallback_rules = 0
 
         for rule in config_manager.root.iter("Rule"):
             if rule.get("groupRelation") == "and":
-                cmd_rules += 1
+                for tag in EXECUTABLE_TAGS:
+                    elem = rule.find(tag)
+                    if elem is not None and elem.text:
+                        if self.__is_counted_rule(elem.text, lolbas_names):
+                            cmd_rules += 1
+                            break
 
         for tag in EXECUTABLE_TAGS:
             for elem in config_manager.root.iter(tag):
                 parent = elem.getparent()
-                if parent is not None and parent.tag != "Rule":
-                    fallback_rules += 1
+                if parent is not None and parent.tag != "Rule" and elem.text:
+                    fallback_rules += self.__is_counted_rule(elem.text, lolbas_names)
 
         covered: list[str] = []
         missing: list[str] = []
