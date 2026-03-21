@@ -12,6 +12,7 @@ from pathlib import Path
 import httpx
 
 from lolbas_sysmon.config import logger
+from lolbas_sysmon.utils import is_cache_stale
 
 
 class LOLBASClient:
@@ -96,7 +97,12 @@ class LOLBASClient:
         self.logger.info(f"Loaded {len(data)} LOLBin entries from {path}")
         return data
 
-    def get_lolbas_data(self, local_path: str | None = None) -> list[dict]:
+    def get_lolbas_data(
+        self,
+        local_path: str | None = None,
+        auto_update: bool = False,
+        max_age_days: int = 7,
+    ) -> list[dict]:
         """
         Get LOLBAS data with automatic source selection.
 
@@ -107,6 +113,8 @@ class LOLBASClient:
 
         Args:
             local_path: Optional explicit path to local JSON file.
+            auto_update: If True, refresh cache if older than max_age_days.
+            max_age_days: Maximum age in days before cache is considered stale.
 
         Returns:
             List of raw LOLBin entry dictionaries.
@@ -121,6 +129,9 @@ class LOLBASClient:
 
         default_path = Path(self.default_json)
         if default_path.exists():
+            if auto_update and is_cache_stale(default_path, max_age_days):
+                self.logger.info(f"LOLBAS cache is older than {max_age_days} days, refreshing")
+                return self.fetch_lolbas_data(save_path=self.default_json)
             return self.load_from_file(str(default_path))
 
         return self.fetch_lolbas_data(save_path=self.default_json)

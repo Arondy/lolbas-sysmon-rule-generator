@@ -12,6 +12,7 @@ from pathlib import Path
 import httpx
 
 from lolbas_sysmon.config import logger
+from lolbas_sysmon.utils import is_cache_stale
 
 
 class MitreClient:
@@ -95,7 +96,12 @@ class MitreClient:
 
         return self._parse_bundle(bundle)
 
-    def get_technique_names(self, local_path: str | None = None) -> dict[str, str]:
+    def get_technique_names(
+        self,
+        local_path: str | None = None,
+        auto_update: bool = False,
+        max_age_days: int = 7,
+    ) -> dict[str, str]:
         """
         Get technique name mappings with automatic source selection.
 
@@ -106,6 +112,8 @@ class MitreClient:
 
         Args:
             local_path: Optional explicit path to local JSON file.
+            auto_update: If True, refresh cache if older than max_age_days.
+            max_age_days: Maximum age in days before cache is considered stale.
 
         Returns:
             Dictionary mapping technique IDs to technique names.
@@ -118,11 +126,17 @@ class MitreClient:
         if local_path:
             path = Path(local_path)
             if path.exists():
+                if auto_update and is_cache_stale(path, max_age_days):
+                    self.logger.info(f"MITRE cache '{local_path}' is older than {max_age_days} days, refreshing")
+                    return self.fetch_from_url(save_path=local_path)
                 return self.load_from_file(local_path)
             raise FileNotFoundError(f"MITRE JSON file not found: {local_path}")
 
         default_path = Path(self.default_json)
         if default_path.exists():
+            if auto_update and is_cache_stale(default_path, max_age_days):
+                self.logger.info(f"MITRE cache is older than {max_age_days} days, refreshing")
+                return self.fetch_from_url(save_path=self.default_json)
             return self.load_from_file(str(default_path))
 
         return self.fetch_from_url(save_path=self.default_json)
