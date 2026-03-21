@@ -8,6 +8,7 @@ standalone rule generation, merging with existing Sysmon configs, and dry-run mo
 
 import argparse
 import json
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import httpx
@@ -15,14 +16,46 @@ from lxml import etree
 
 from lolbas_sysmon.config import Config, ConfigLoader, logger
 from lolbas_sysmon.config.settings import DEFAULT_OUTPUT_FILE
+from lolbas_sysmon.models import LOLBin
 from lolbas_sysmon.services import (
     EXECUTABLE_TAGS,
     LOLBASClient,
     LOLBASParser,
     MitreClient,
+    SigmaClient,
+    SigmaConverter,
     SysmonConfigManager,
     SysmonRuleGenerator,
 )
+
+
+@dataclass
+class SigmaEnrichmentStats:
+    """Statistics for Sigma rule enrichment process."""
+
+    urls_total: int = 0
+    urls_downloaded: int = 0
+    urls_cached: int = 0
+    urls_failed: int = 0
+    rules_parsed: int = 0
+    rules_convertible: int = 0
+    rules_skipped_fields: int = 0
+    rules_skipped_features: int = 0
+    lolbins_enriched: int = 0
+    skipped_reasons: dict[str, int] = field(default_factory=dict)
+
+    def log_summary(self, log_func) -> None:
+        """Log a formatted summary of enrichment statistics."""
+        log_func("Sigma enrichment summary:")
+        log_func(f"  URLs: {self.urls_total} total, {self.urls_downloaded} downloaded, {self.urls_cached} cached, {self.urls_failed} failed")
+        log_func(f"  Rules: {self.rules_parsed} parsed, {self.rules_convertible} convertible")
+        log_func(f"  Skipped: {self.rules_skipped_fields} (unsupported fields), {self.rules_skipped_features} (unsupported features)")
+        log_func(f"  LOLBins enriched: {self.lolbins_enriched}")
+
+        if self.skipped_reasons:
+            top_reasons = sorted(self.skipped_reasons.items(), key=lambda x: -x[1])[:5]
+            reasons_str = ", ".join(f"{reason}: {count}" for reason, count in top_reasons)
+            log_func(f"  Top skip reasons: {reasons_str}")
 
 
 class CLI:
@@ -142,7 +175,27 @@ class CLI:
         parser.add_argument(
             "--update-data",
             action="store_true",
-            help="Force re-download of LOLBAS and MITRE data from URLs",
+            help="Force re-download of LOLBAS, MITRE, and Sigma data",
+        )
+        parser.add_argument(
+            "--update-lolbas",
+            action="store_true",
+            help="Force re-download of LOLBAS JSON data from URL",
+        )
+        parser.add_argument(
+            "--update-mitre",
+            action="store_true",
+            help="Force re-download of MITRE ATT&CK JSON data from URL",
+        )
+        parser.add_argument(
+            "--no-sigma",
+            action="store_true",
+            help="Disable Sigma-based rule enrichment",
+        )
+        parser.add_argument(
+            "--update-sigma",
+            action="store_true",
+            help="Force re-download of cached Sigma rules",
         )
         return parser
 
@@ -155,8 +208,9 @@ class CLI:
         2. Configuration loading
         3. MITRE ATT&CK data loading
         4. LOLBAS data fetching/loading
-        5. Rule generation
-        6. Output (dry-run, merge, or standalone save)
+        5. Sigma enrichment (if enabled)
+        6. Rule generation
+        7. Output (dry-run, merge, or standalone save)
 
         Args:
             args: Optional list of CLI arguments. If None, sys.argv is used.
@@ -171,25 +225,90 @@ class CLI:
 
         self.logger.info("Starting LOLBAS Sysmon Rule Generator")
 
+        # Validate input files
+        if error := self._validate_input_files(parsed_args):
+            return error
+
+        # Load configuration
+        config = self._load_config(parsed_args)
+        if config is None:
+            return 1
+
+        # Log update flags
+        self._log_update_flags(parsed_args)
+
+        # Load MITRE data
+        mitre_technique_names = self._load_mitre_data(
+            config,
+            parsed_args.mitre_json,
+            force_update=parsed_args.update_data or parsed_args.update_mitre,
+        )
+
+        # Load LOLBAS data
+        lolbins = self._load_lolbas_data(config, parsed_args)
+        if lolbins is None:
+            return 1
+
+        # Sigma enrichment
+        use_sigma = config.sigma.enabled and not parsed_args.no_sigma
+        if use_sigma:
+            force_update_sigma = parsed_args.update_data or parsed_args.update_sigma
+            self._enrich_with_sigma(lolbins, config, force_update=force_update_sigma)
+        else:
+            self.logger.info("Sigma enrichment disabled")
+
+        # Generate and output rules
+        return self._generate_and_output(config, lolbins, mitre_technique_names, parsed_args)
+
+    def _validate_input_files(self, parsed_args) -> int | None:
+        """
+        Validate that specified input files exist.
+
+        Args:
+            parsed_args: Parsed command-line arguments.
+
+        Returns:
+            Error code 1 if validation fails, None if all files exist.
+        """
         if parsed_args.input and not Path(parsed_args.input).exists():
             self.logger.error(f"Input file not found: {parsed_args.input}")
             return 1
 
-        if parsed_args.lolbas_json and not Path(parsed_args.lolbas_json).exists():
+        # In force-update mode, custom JSON path may be used as a new save target.
+        require_lolbas_file = not (parsed_args.update_data or parsed_args.update_lolbas)
+        if require_lolbas_file and parsed_args.lolbas_json and not Path(parsed_args.lolbas_json).exists():
             self.logger.error(f"LOLBAS JSON file not found: {parsed_args.lolbas_json}")
             return 1
 
-        if parsed_args.mitre_json and not Path(parsed_args.mitre_json).exists():
+        # In force-update mode, custom JSON path may be used as a new save target.
+        require_mitre_file = not (parsed_args.update_data or parsed_args.update_mitre)
+        if require_mitre_file and parsed_args.mitre_json and not Path(parsed_args.mitre_json).exists():
             self.logger.error(f"MITRE JSON file not found: {parsed_args.mitre_json}")
             return 1
 
+        return None
+
+    def _load_config(self, parsed_args) -> Config | None:
+        """
+        Load and configure the application config.
+
+        Loads from TOML file, applies CLI overrides for categories
+        and unique_rules flag.
+
+        Args:
+            parsed_args: Parsed command-line arguments.
+
+        Returns:
+            Configured Config object, or None on error.
+        """
         config_loader = ConfigLoader()
         try:
             config = config_loader.load(parsed_args.config)
         except FileNotFoundError as e:
             self.logger.error(str(e))
-            return 1
+            return None
 
+        # Override categories from CLI
         if parsed_args.category:
             categories = [c.strip() for c in parsed_args.category.split(",")]
             for cat in categories:
@@ -197,7 +316,7 @@ class CLI:
                     self.logger.warning(f"Category '{cat}' is not in enabled categories from config")
             config.categories = categories
 
-        # Override unique_rules from CLI if specified
+        # Override unique_rules from CLI
         if parsed_args.unique_rules:
             config.unique_rules = True
 
@@ -205,32 +324,87 @@ class CLI:
         if config.unique_rules:
             self.logger.info("Unique rules mode enabled: skipping duplicates")
 
-        force_update = parsed_args.update_data
-        if force_update:
-            self.logger.info("Force update mode: re-downloading LOLBAS and MITRE data")
+        return config
 
-        mitre_technique_names = self._load_mitre_data(config, parsed_args.mitre_json, force_update)
+    def _log_update_flags(self, parsed_args) -> None:
+        """Log which data sources will be force-updated."""
+        force_update_all = parsed_args.update_data
+        force_update_lolbas = force_update_all or parsed_args.update_lolbas
+        force_update_mitre = force_update_all or parsed_args.update_mitre
+        force_update_sigma = force_update_all or parsed_args.update_sigma
+
+        if force_update_all:
+            self.logger.info("Force update mode: re-downloading LOLBAS, MITRE, and Sigma data")
+        else:
+            if force_update_lolbas:
+                self.logger.info("Force update mode: re-downloading LOLBAS data")
+            if force_update_mitre:
+                self.logger.info("Force update mode: re-downloading MITRE data")
+            if force_update_sigma:
+                self.logger.info("Force update mode: re-downloading Sigma data")
+
+    def _load_lolbas_data(self, config: Config, parsed_args) -> list[LOLBin] | None:
+        """
+        Load and parse LOLBAS data.
+
+        Fetches from URL or loads from local file, then parses into LOLBin objects.
+
+        Args:
+            config: Application configuration.
+            parsed_args: Parsed command-line arguments.
+
+        Returns:
+            List of parsed LOLBin objects, or None on error.
+        """
+        force_update_lolbas = parsed_args.update_data or parsed_args.update_lolbas
 
         try:
             client = LOLBASClient(url=config.lolbas.url, default_json=config.lolbas.json_file)
-            if force_update:
-                raw_data = client.fetch_lolbas_data(save_path=config.lolbas.json_file)
+            if force_update_lolbas:
+                save_path = parsed_args.lolbas_json or config.lolbas.json_file
+                raw_data = client.fetch_lolbas_data(save_path=save_path)
             else:
-                raw_data = client.get_lolbas_data(parsed_args.lolbas_json)
+                raw_data = client.get_lolbas_data(
+                    parsed_args.lolbas_json,
+                    auto_update=config.lolbas.auto_update,
+                    max_age_days=config.lolbas.max_age_days,
+                )
         except FileNotFoundError as e:
             self.logger.error(f"LOLBAS JSON file not found: {e}")
-            return 1
+            return None
         except json.JSONDecodeError as e:
             self.logger.error(f"Invalid JSON in LOLBAS file: {e}")
-            return 1
+            return None
         except httpx.HTTPError as e:
             self.logger.error(f"Failed to fetch LOLBAS data: {e}")
-            return 1
+            return None
 
         lolbas_parser = LOLBASParser()
-        lolbins = lolbas_parser.parse(raw_data)
+        return lolbas_parser.parse(raw_data)
 
-        lolbins_by_category: dict[str, list] = {}
+    def _generate_and_output(
+        self,
+        config: Config,
+        lolbins: list[LOLBin],
+        mitre_technique_names: dict[str, str],
+        parsed_args,
+    ) -> int:
+        """
+        Generate rules and handle output (dry-run, merge, or standalone save).
+
+        Args:
+            config: Application configuration.
+            lolbins: List of parsed LOLBin objects.
+            mitre_technique_names: MITRE technique ID to name mapping.
+            parsed_args: Parsed command-line arguments.
+
+        Returns:
+            Exit code: 0 for success, 1 for errors.
+        """
+        # Filter LOLBins by category
+        lolbas_parser = LOLBASParser()
+        lolbins_by_category: dict[str, list[LOLBin]] = {}
+
         for category in config.categories:
             filtered = lolbas_parser.filter_by_category(lolbins, category)
             if filtered:
@@ -242,9 +416,9 @@ class CLI:
             self.logger.warning("No LOLBins found for any specified category")
             return 0
 
+        # Generate rules
         generator = SysmonRuleGenerator(config, mitre_technique_names)
 
-        # Determine rule type based on CLI flags
         if parsed_args.only_cmd:
             rule_type = "cmd"
             self.logger.info("Generating only CommandLine rules")
@@ -256,6 +430,7 @@ class CLI:
 
         rule_groups = generator.generate_all_rule_groups(lolbins_by_category, rule_type=rule_type)
 
+        # Output
         if parsed_args.dry_run:
             return self._dry_run(rule_groups, generator)
 
@@ -294,7 +469,8 @@ class CLI:
 
         if force_update:
             try:
-                return mitre_client.fetch_from_url(save_path=config.mitre.json_file)
+                save_path = mitre_json_arg or config.mitre.json_file
+                return mitre_client.fetch_from_url(save_path=save_path)
             except httpx.HTTPError as e:
                 self.logger.warning(f"Failed to fetch MITRE data: {e}, using technique IDs as names")
                 return {}
@@ -302,7 +478,11 @@ class CLI:
         if mitre_json_arg:
             custom_path = mitre_json_arg
             try:
-                return mitre_client.get_technique_names(custom_path)
+                return mitre_client.get_technique_names(
+                    custom_path,
+                    auto_update=config.mitre.auto_update,
+                    max_age_days=config.mitre.max_age_days,
+                )
             except FileNotFoundError:
                 self.logger.warning(f"MITRE JSON file '{custom_path}' not found, fetching from URL")
             except json.JSONDecodeError as e:
@@ -315,7 +495,10 @@ class CLI:
                 return {}
 
         try:
-            return mitre_client.get_technique_names()
+            return mitre_client.get_technique_names(
+                auto_update=config.mitre.auto_update,
+                max_age_days=config.mitre.max_age_days,
+            )
         except json.JSONDecodeError as e:
             self.logger.warning(f"Invalid MITRE JSON file '{config.mitre.json_file}': {e}, fetching from URL")
         except FileNotFoundError:
@@ -326,6 +509,88 @@ class CLI:
         except httpx.HTTPError as e:
             self.logger.warning(f"Failed to fetch MITRE data: {e}, using technique IDs as names")
             return {}
+
+    def _enrich_with_sigma(
+        self,
+        lolbins: list[LOLBin],
+        config: Config,
+        force_update: bool = False,
+    ) -> SigmaEnrichmentStats:
+        """
+        Enrich LOLBins with parsed Sigma detection rules.
+
+        Downloads Sigma rules referenced in LOLBAS Detection sections,
+        parses them, and attaches convertible rules to LOLBin objects.
+
+        Args:
+            lolbins: Parsed LOLBin objects to enrich.
+            config: Loaded application config with Sigma settings.
+            force_update: If True, ignore cache and re-download Sigma rules.
+
+        Returns:
+            SigmaEnrichmentStats with detailed statistics.
+        """
+        stats = SigmaEnrichmentStats()
+        sigma_client = SigmaClient(cache_dir=config.sigma.cache_dir)
+        sigma_converter = SigmaConverter()
+
+        for lolbin in lolbins:
+            if not lolbin.detection_urls:
+                continue
+
+            lolbin_got_rule = False
+
+            for url in lolbin.detection_urls:
+                if not SigmaClient.is_sigma_url(url):
+                    continue
+
+                stats.urls_total += 1
+
+                path, from_cache = sigma_client.download_rule(
+                    url,
+                    force=force_update,
+                    auto_update=config.sigma.auto_update,
+                    max_age_days=config.sigma.max_age_days,
+                )
+
+                if path is None:
+                    stats.urls_failed += 1
+                    continue
+
+                if from_cache:
+                    stats.urls_cached += 1
+                else:
+                    stats.urls_downloaded += 1
+
+                sigma_rule = sigma_converter.parse_rule(path, source_url=url)
+                if sigma_rule is None:
+                    continue
+
+                stats.rules_parsed += 1
+
+                if sigma_converter.is_rule_convertible(sigma_rule):
+                    stats.rules_convertible += 1
+                    lolbin.sigma_rules.append(sigma_rule)
+                    lolbin_got_rule = True
+                else:
+                    # Track skip reasons
+                    if sigma_rule.unsupported_fields:
+                        stats.rules_skipped_fields += 1
+                        for field_name in sigma_rule.unsupported_fields:
+                            reason = f"field:{field_name}"
+                            stats.skipped_reasons[reason] = stats.skipped_reasons.get(reason, 0) + 1
+
+                    if sigma_rule.unsupported_features:
+                        stats.rules_skipped_features += 1
+                        for feature in sigma_rule.unsupported_features:
+                            reason = f"feature:{feature}"
+                            stats.skipped_reasons[reason] = stats.skipped_reasons.get(reason, 0) + 1
+
+            if lolbin_got_rule:
+                stats.lolbins_enriched += 1
+
+        stats.log_summary(self.logger.info)
+        return stats
 
     def _dry_run(
         self,
@@ -506,7 +771,11 @@ class CLI:
 
         try:
             client = LOLBASClient(url=config.lolbas.url, default_json=config.lolbas.json_file)
-            raw_data = client.get_lolbas_data(parsed_args.lolbas_json)
+            raw_data = client.get_lolbas_data(
+                parsed_args.lolbas_json,
+                auto_update=config.lolbas.auto_update,
+                max_age_days=config.lolbas.max_age_days,
+            )
         except (FileNotFoundError, json.JSONDecodeError, httpx.HTTPError) as e:
             self.logger.error(f"Failed to load LOLBAS data: {e}")
             return 1
