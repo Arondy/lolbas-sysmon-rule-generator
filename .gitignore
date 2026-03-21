@@ -1,6 +1,7 @@
 .*/
 !.github/
 __pycache__/
+cache_*/
 logs.txt
 traceback.txt
 *.json
