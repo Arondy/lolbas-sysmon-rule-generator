@@ -61,7 +61,7 @@ class TestSysmonRuleGenerator:
         rule_group = generator.generate_rule_group([sample_lolbin], "Download", with_cmdline=False)
 
         assert rule_group is not None
-
+        # RuleGroup contains ProcessCreate section which contains the rule
         process_create = rule_group.find("ProcessCreate")
         assert process_create is not None
         rule = process_create.find("OriginalFileName")
@@ -108,6 +108,7 @@ class TestSysmonRuleGenerator:
         )
         rule_group = generator.generate_rule_group([lolbin], "Execute", with_cmdline=True)
 
+        # No flags = no CMD rules = None
         assert rule_group is None
 
     def test_rule_group_name(self, generator, sample_lolbin):
@@ -150,6 +151,7 @@ class TestSysmonRuleGenerator:
         lolbins_by_category = {"Download": [sample_lolbin]}
         rule_groups = generator.generate_all_rule_groups(lolbins_by_category)
 
+        # Should have CMD group first, then fallback
         assert len(rule_groups) == 2
         assert "CMD" in rule_groups[0].get("name")
         assert "CMD" not in rule_groups[1].get("name")
@@ -232,6 +234,7 @@ class TestUniqueRulesDeduplication:
 
         rule_groups = generator_unique.generate_all_rule_groups(lolbins_by_category)
 
+        # Count fallback rules for test.exe
         fallback_count = 0
         for rg in rule_groups:
             if "CMD" not in rg.get("name", ""):
@@ -239,7 +242,7 @@ class TestUniqueRulesDeduplication:
                     if rule.text == "test.exe":
                         fallback_count += 1
 
-        assert fallback_count == 1
+        assert fallback_count == 1  # Should only appear once
 
     def test_cmd_rules_with_different_flags_not_deduplicated(self, generator_unique):
         """Test CMD rules with different flags are NOT deduplicated."""
@@ -261,12 +264,14 @@ class TestUniqueRulesDeduplication:
 
         rule_groups = generator_unique.generate_all_rule_groups(lolbins_by_category)
 
+        # Count CMD rules for cmd.exe
         cmd_count = 0
         for rg in rule_groups:
             if "CMD" in rg.get("name", ""):
                 for _rule in rg.iter("Rule"):
                     cmd_count += 1
 
+        # Both should exist because flags are different (/c vs /k)
         assert cmd_count == 2
 
     def test_cmd_rules_with_same_flags_deduplicated(self, generator_unique):
@@ -289,10 +294,12 @@ class TestUniqueRulesDeduplication:
 
         rule_groups = generator_unique.generate_all_rule_groups(lolbins_by_category)
 
+        # Count CMD rules for cmd.exe
         cmd_count = 0
         for rg in rule_groups:
             if "CMD" in rg.get("name", ""):
                 for _rule in rg.iter("Rule"):
                     cmd_count += 1
 
+        # Only one should exist because flags are the same (/c)
         assert cmd_count == 1
