@@ -4,6 +4,8 @@ Data models for LOLBAS entries.
 This module defines dataclasses representing LOLBin (Living Off The Land Binary)
 entries from the LOLBAS project, including their commands, categories, and
 associated MITRE ATT&CK technique mappings.
+
+Also includes Sigma detection rule models for enhanced rule generation.
 """
 
 import re
@@ -71,7 +73,7 @@ class Command:
         cmd = re.sub(r'\{[^}]+\}', '', cmd)
 
         # Tokenize, preserving quoted strings
-        tokens = re.findall(r'[^\s"\']+|"[^"]*"|\'[^\']*\'', cmd)
+        tokens = re.findall(r'[^\s"\']+|"[^"]*"|\'[^"]*\'', cmd)
         flags: list[str] = []
 
         for token in tokens:
@@ -93,6 +95,128 @@ class Command:
 
 
 @dataclass
+class SigmaCondition:
+    """
+    A single field condition from a Sigma rule.
+
+    Represents one condition like "CommandLine contains 'value'".
+
+    Attributes:
+        field: Sysmon field name (e.g., "CommandLine", "Image").
+        modifier: Sysmon condition modifier ("is", "contains", "begin with", "end with",
+                  "contains all", "contains any").
+        values: List of values to match against.
+        negated: Whether this condition is negated (NOT).
+    """
+
+    field: str
+    modifier: str
+    values: list[str]
+    negated: bool = False
+
+
+@dataclass
+class SigmaDetectionBlock:
+    """
+    A detection block (selection) from a Sigma rule.
+
+    Represents a group of conditions that are ANDed together.
+
+    Attributes:
+        name: Block name from Sigma rule (e.g., "selection_img", "selection_cmd").
+        conditions: List of SigmaCondition objects in this block.
+    """
+
+    name: str
+    conditions: list[SigmaCondition] = field(default_factory=list)
+
+
+@dataclass
+class SigmaRuleBranch:
+    """One DNF branch of a Sigma condition expression.
+
+    A branch is interpreted as:
+      include_blocks AND NOT exclude_blocks
+    Multiple branches are OR'ed together.
+    """
+
+    include_blocks: list[str] = field(default_factory=list)
+    exclude_blocks: list[str] = field(default_factory=list)
+
+
+@dataclass
+class SigmaDetectionRule:
+    """
+    A parsed Sigma detection rule.
+
+    Contains all extracted information from a Sigma YAML file
+    that is relevant for Sysmon rule generation.
+
+    Attributes:
+        title: Rule title for use in XML comments.
+        rule_id: Sigma rule UUID.
+        level: Detection level (informational, low, medium, high, critical).
+        logsource_category: Sigma logsource category (e.g., "process_creation").
+        mitre_tags: List of MITRE ATT&CK technique IDs extracted from tags.
+        detection_blocks: List of detection blocks (selections).
+        condition_expr: Original condition expression string.
+        unsupported_fields: Fields that couldn't be mapped to Sysmon.
+        unsupported_features: Unsupported Sigma capabilities detected in the rule
+            (for example: not, regex, count, near, timeframe, value transforms).
+        branches: Condition branches in disjunctive normal form.
+        source_url: Original URL where this rule was fetched from.
+    """
+
+    title: str
+    rule_id: str
+    level: str
+    logsource_category: str
+    mitre_tags: list[str] = field(default_factory=list)
+    detection_blocks: list[SigmaDetectionBlock] = field(default_factory=list)
+    condition_expr: str = ""
+    unsupported_fields: list[str] = field(default_factory=list)
+    unsupported_features: list[str] = field(default_factory=list)
+    branches: list[SigmaRuleBranch] = field(default_factory=list)
+    source_url: str = ""
+
+    def is_convertible(self) -> bool:
+        """
+        Check if this Sigma rule can be converted to Sysmon.
+
+        A rule is considered convertible only when it has parsed detection
+        blocks and does not rely on unsupported fields or unsupported Sigma
+        language features.
+
+        Returns:
+            True if the rule can be converted safely.
+        """
+        if not self.detection_blocks:
+            return False
+        if self.unsupported_fields:
+            return False
+        if self.unsupported_features:
+            return False
+        return any(len(block.conditions) > 0 for block in self.detection_blocks)
+
+    def get_mitre_info(self, technique_names: dict[str, str] | None = None) -> list[MitreInfo]:
+        """
+        Get MITRE ATT&CK technique info from rule tags.
+
+        Args:
+            technique_names: Optional mapping of technique IDs to names.
+
+        Returns:
+            List of MitreInfo objects.
+        """
+        names_map = technique_names or {}
+        result: list[MitreInfo] = []
+        for tid in self.mitre_tags:
+            name = names_map.get(tid, tid)
+            result.append(MitreInfo(technique_id=tid, technique_name=name))
+        return result
+
+
+@dataclass
 class LOLBin:
     """
     A Living Off The Land Binary/Script entry.
@@ -107,6 +231,8 @@ class LOLBin:
         description: General description of the LOLBin.
         commands: List of command examples with categories.
         mitre_ids: List of associated MITRE ATT&CK technique IDs.
+        detection_urls: List of Sigma rule URLs from Detection section.
+        sigma_rules: Parsed Sigma detection rules (populated after fetch).
     """
 
     name: str
@@ -114,6 +240,16 @@ class LOLBin:
     description: str
     commands: list[Command] = field(default_factory=list)
     mitre_ids: list[str] = field(default_factory=list)
+    detection_urls: list[str] = field(default_factory=list)
+    sigma_rules: list[SigmaDetectionRule] = field(default_factory=list)
+
+    def has_sigma_rules(self) -> bool:
+        """Check if this LOLBin has any parsed Sigma rules."""
+        return len(self.sigma_rules) > 0
+
+    def get_convertible_sigma_rules(self) -> list[SigmaDetectionRule]:
+        """Get only Sigma rules that can be converted to Sysmon."""
+        return [rule for rule in self.sigma_rules if rule.is_convertible()]
 
     def get_mitre_info_for_category(
         self,
