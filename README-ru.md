@@ -7,23 +7,31 @@
 
 ---
 
-CLI-утилита на Python для автоматической генерации правил обнаружения Sysmon на основе данных [LOLBAS Project](https://lolbas-project.github.io/) (Living Off The Land Binaries and Scripts).
+CLI-утилита на Python для автоматической генерации правил обнаружения Sysmon на основе данных [LOLBAS Project](https://lolbas-project.github.io/) (Living Off The Land Binaries and Scripts), обогащённых [Sigma Rules](https://github.com/SigmaHQ/sigma) и маппингом [MITRE ATT&CK](https://attack.mitre.org/).
 
 ## Обзор
 
-LOLBAS Project документирует легитимные бинарные файлы Windows, которые могут быть использованы злоумышленниками. Этот инструмент автоматизирует создание правил Sysmon для этих бинарных файлов, обогащая их маппингом техник MITRE ATT&CK.
+LOLBAS Project документирует легитимные бинарные файлы Windows, которые могут быть использованы злоумышленниками. Этот инструмент автоматизирует создание правил Sysmon для этих бинарных файлов, комбинируя три источника данных для максимального покрытия:
+
+1. **LOLBAS Project** — определения LOLBins с примерами команд и категориями
+2. **Sigma Rules** — детекторские правила сообщества, указанные в записях LOLBAS
+3. **MITRE ATT&CK** — идентификаторы и названия техник для аннотации правил
 
 ### Ключевые возможности
 
 - **Автоматическая генерация правил** — Получает данные LOLBAS Project и генерирует XML-правила Sysmon
-- **Несколько типов событий** — Поддержка ProcessCreate (Event ID 1), ProcessAccess (Event ID 10) и FileCreate (Event ID 11)
+- **Обогащение Sigma Rules** — Загружает и парсит Sigma-правила из ссылок LOLBAS для более точных CommandLine правил (приоритет над извлечёнными флагами)
+- **Несколько типов событий** — Поддержка ProcessCreate (Event ID 1), NetworkConnect (Event ID 3), ImageLoad (Event ID 7), ProcessAccess (Event ID 10) и FileCreate (Event ID 11)
 - **Два типа правил**:
-  - **CommandLine правила** — Более точное обнаружение с использованием executable + флагов командной строки
+  - **CommandLine правила** — Более точное обнаружение с использованием executable + флагов командной строки (из Sigma или примеров команд LOLBAS)
   - **Fallback правила** — Более широкое обнаружение только по имени executable
 - **Интеграция с MITRE ATT&CK** — Обогащение правил идентификаторами и названиями техник
+- **Умное кэширование** — Все внешние данные (LOLBAS, MITRE, Sigma) кэшируются локально с настраиваемым автообновлением (по умолчанию: 28 дней)
 - **Гибкая конфигурация** — TOML-конфигурация для категорий, маппингов и префиксов
 - **Поддержка слияния** — Объединение сгенерированных правил с существующими конфигурациями Sysmon
+- **Анализ покрытия** — Анализ сколько LOLBins покрыто существующей конфигурацией Sysmon
 - **Дедупликация** — Опциональный флаг `--unique-rules` для пропуска дублирующихся правил между категориями
+- **Детальная статистика** — Сводка обогащения Sigma с счётчиками загрузок/парсинга/пропусков
 
 ## Установка
 
@@ -36,8 +44,8 @@ LOLBAS Project документирует легитимные бинарные 
 
 1. Клонируйте репозиторий:
 ```bash
-git clone https://github.com/yourusername/lolbas-sysmon-generator.git
-cd lolbas-sysmon-generator
+git clone https://github.com/Arondy/lolbas-sysmon-rule-generator.git
+cd lolbas-sysmon-rule-generator
 ```
 
 2. Установите зависимости через pip:
@@ -63,14 +71,18 @@ python -m lolbas_sysmon
 Это выполнит:
 1. Загрузку данных LOLBAS (или использование кэшированного `lolbas.json`)
 2. Загрузку данных MITRE ATT&CK (или использование кэшированного `enterprise-attack.json`)
-3. Генерацию правил и сохранение в `lolbas_rules.xml`
+3. Загрузку и парсинг Sigma-правил, указанных в записях LOLBAS
+4. Генерацию правил и сохранение в `lolbas_rules.xml`
 
 ### Параметры командной строки
 
 ```
 usage: lolbas_sysmon [-h] [-i INPUT] [-o OUTPUT] [-f] [-c CONFIG]
                      [--category CATEGORY] [--dry-run] [--lolbas-json PATH]
-                     [--mitre-json PATH] [--unique-rules]
+                     [--mitre-json PATH] [--unique-rules] [--coverage]
+                     [--show-missing] [--show-covered] [--only-cmd | --only-fallback]
+                     [--update-data] [--update-lolbas] [--update-mitre]
+                     [--no-sigma] [--update-sigma]
 
 Генерация правил обнаружения Sysmon из данных LOLBAS
 
@@ -85,6 +97,16 @@ options:
   --lolbas-json PATH    Путь к локальному JSON-файлу LOLBAS
   --mitre-json PATH     Путь к локальному JSON-файлу MITRE ATT&CK
   --unique-rules        Пропускать дублирующиеся правила для одного executable в рамках одного event type
+  --coverage            Анализ покрытия LOLBAS в существующей конфигурации Sysmon (требует -i)
+  --show-missing        Показать список LOLBins, отсутствующих в конфигурации (используется с --coverage)
+  --show-covered        Показать список покрытых LOLBins (используется с --coverage)
+  --only-cmd            Генерировать только CommandLine правила (более специфичные)
+  --only-fallback       Генерировать только fallback правила (только имя executable)
+  --update-data         Принудительно перезагрузить данные LOLBAS, MITRE и Sigma
+  --update-lolbas       Принудительно перезагрузить данные LOLBAS JSON
+  --update-mitre        Принудительно перезагрузить данные MITRE ATT&CK JSON
+  --no-sigma            Отключить обогащение на основе Sigma-правил
+  --update-sigma        Принудительно перезагрузить кэшированные Sigma-правила
 ```
 
 ### Примеры
@@ -112,6 +134,31 @@ python -m lolbas_sysmon -i sysmonconfig.xml -o merged_config.xml --force
 **Генерация дедуплицированных правил:**
 ```bash
 python -m lolbas_sysmon --unique-rules
+```
+
+**Генерация только CommandLine правил (без fallback):**
+```bash
+python -m lolbas_sysmon --only-cmd
+```
+
+**Генерация только fallback правил (без CommandLine):**
+```bash
+python -m lolbas_sysmon --only-fallback
+```
+
+**Отключение обогащения Sigma (использовать только примеры команд LOLBAS):**
+```bash
+python -m lolbas_sysmon --no-sigma
+```
+
+**Принудительное обновление всех кэшированных данных:**
+```bash
+python -m lolbas_sysmon --update-data
+```
+
+**Принудительное обновление только Sigma-правил:**
+```bash
+python -m lolbas_sysmon --update-sigma
 ```
 
 **Показать покрытые и отсутствующие LOLBins:**
@@ -167,12 +214,18 @@ enabled = [
   "ADS",
   "AWL Bypass",
   "Compile",
+  "Conceal",
+  "Copy",
   "Credentials",
   "Decode",
   "Download",
   "Dump",
+  "Encode",
   "Execute",
-  # ... другие категории
+  "Reconnaissance",
+  "Tamper",
+  "UAC Bypass",
+  "Upload",
 ]
 ```
 
@@ -182,6 +235,8 @@ enabled = [
 | ADS | Операции с Alternate Data Stream |
 | AWL Bypass | Обход белых списков приложений |
 | Compile | Компиляция кода |
+| Conceal | Сокрытие вредоносной активности |
+| Copy | Операции копирования файлов |
 | Credentials | Доступ к учётным данным/дампинг |
 | Decode | Декодирование закодированных payload'ов |
 | Download | Загрузка файлов из интернета |
@@ -189,21 +244,24 @@ enabled = [
 | Encode | Кодирование payload'ов |
 | Execute | Выполнение произвольного кода/команд |
 | Reconnaissance | Перечисление системы/сети |
-| Tamper | Изменение системных настроек |
+| Tamper | Изменение системных настроек/файлов |
 | UAC Bypass | Обход User Account Control |
 | Upload | Эксфильтрация данных |
 
 ### Маппинг типов событий
 
-Сопоставление категорий с типами событий Sysmon:
+Сопоставление категорий с одним или несколькими типами событий Sysmon:
 
 ```toml
 [mappings]
-"Execute" = "ProcessCreate"      # Event ID 1
-"Credentials" = "ProcessAccess"  # Event ID 10
-"Download" = "ProcessCreate"     # Event ID 1
-"ADS" = "FileCreate"             # Event ID 11
+"Execute" = ["ProcessCreate", "ImageLoad"]    # Event ID 1, 7
+"Download" = ["ProcessCreate", "NetworkConnect"]  # Event ID 1, 3
+"Credentials" = ["ProcessAccess"]             # Event ID 10
+"ADS" = ["FileCreate"]                        # Event ID 11
+"Dump" = ["ProcessAccess", "ImageLoad"]       # Event ID 10, 7
 ```
+
+> **Примечание:** Правила ImageLoad генерируются только для LOLBins с расширением `.dll`.
 
 ### Настройки Rule Group
 
@@ -220,10 +278,24 @@ unique_rules = false         # Включить дедупликацию по у
 [lolbas]
 json_file = "lolbas.json"
 url = "https://lolbas-project.github.io/api/lolbas.json"
+auto_update = true
+max_age_days = 28
 
 [mitre]
 json_file = "enterprise-attack.json"
 url = "https://raw.githubusercontent.com/mitre/cti/master/enterprise-attack/enterprise-attack.json"
+auto_update = true
+max_age_days = 28
+```
+
+### Конфигурация Sigma
+
+```toml
+[sigma]
+enabled = true
+cache_dir = "cache_sigma_rules"
+auto_update = true
+max_age_days = 28
 ```
 
 ## Формат вывода
@@ -234,14 +306,14 @@ url = "https://raw.githubusercontent.com/mitre/cti/master/enterprise-attack/ente
 <?xml version='1.0' encoding='utf-8'?>
 <Sysmon schemaversion="4.90">
   <EventFiltering>
-    <!-- CommandLine правила (более специфичные) -->
+    <!-- CommandLine правила (более специфичные, обогащённые Sigma) -->
     <RuleGroup name="LOLBAS_CMD_Execute" groupRelation="or">
       <ProcessCreate onmatch="include">
-        <!-- Загрузка и выполнение удалённого XSL-скрипта -->
+        <!-- Sigma: Suspicious Certutil Command Usage | Level: high | ID: e011a729-... -->
         <Rule groupRelation="and"
-              name="technique_id=T1220,technique_name=XSL Script Processing">
-          <OriginalFileName condition="is">wmic.exe</OriginalFileName>
-          <CommandLine condition="contains any">/format</CommandLine>
+              name="technique_id=T1027,technique_name=Obfuscated Files or Information">
+          <OriginalFileName condition="is">CertUtil.exe</OriginalFileName>
+          <CommandLine condition="contains any">-decode;-decodehex;-urlcache;-encode</CommandLine>
         </Rule>
       </ProcessCreate>
     </RuleGroup>
@@ -264,17 +336,39 @@ url = "https://raw.githubusercontent.com/mitre/cti/master/enterprise-attack/ente
 
 1. **Получение данных** — Загружает JSON LOLBAS (список LOLBins с командами, категориями, маппингами MITRE) и данные MITRE ATT&CK (названия техник)
 
-2. **Парсинг и фильтрация** — Парсит записи LOLBin и фильтрует по включённым категориям
+2. **Обогащение Sigma** — Загружает Sigma-правила, указанные в записях LOLBAS, парсит блоки обнаружения и выражения условий, прикрепляет конвертируемые правила к LOLBins
 
-3. **Генерация правил** — Для каждой категории:
-   - Создаёт CommandLine правила (executable + специфичные флаги из примеров команд)
+3. **Парсинг и фильтрация** — Парсит записи LOLBin и фильтрует по включённым категориям
+
+4. **Генерация правил** — Для каждой категории и типа события:
+   - Создаёт CommandLine правила, используя Sigma-правила (приоритет) или флаги из команд LOLBAS (запасной вариант)
    - Создаёт fallback правила (только имя executable/OriginalFileName)
+   - Правила ImageLoad генерируются только для `.dll` LOLBins
 
-   > **Ограничение схемы Sysmon:** Поле CommandLine доступно только в событиях ProcessCreate. Для категорий, сопоставленных с FileCreate или ProcessAccess, генерируются только fallback правила.
+   > **Ограничение схемы Sysmon:** Поле CommandLine доступно только в событиях ProcessCreate. Для категорий, сопоставленных с FileCreate, ProcessAccess, NetworkConnect или ImageLoad, генерируются только fallback правила.
 
-4. **Обогащение MITRE** — Добавляет `technique_id` и `technique_name` в атрибуты правил
+5. **Обогащение MITRE** — Добавляет `technique_id` и `technique_name` в атрибуты правил
 
-5. **Вывод** — Сохраняет standalone XML или объединяет с существующей конфигурацией Sysmon
+6. **Вывод** — Сохраняет standalone XML или объединяет с существующей конфигурацией Sysmon
+
+### Детали обогащения Sigma
+
+Инструмент загружает Sigma YAML-файлы по URL-адресам из секции `Detection` записей LOLBAS, конвертирует GitHub blob URL в raw content URL и парсит их с помощью [pySigma](https://github.com/SigmaHQ/pySigma). Поддерживаемые возможности Sigma:
+
+- **Категории logsource**: `process_creation`, `file_event`, `network_connection`, `image_load`, `process_access`, `registry_event`
+- **Логика условий**: `and`, `or`, `not`, `1 of selection_*`, `all of selection_*`, выражения в скобках
+- **Модификаторы полей**: `contains`, `startswith`, `endswith`, `contains|all`, `contains|any`
+
+После обогащения выводится детальная сводка статистики:
+
+```
+Sigma enrichment summary:
+  URLs: 292 total, 258 downloaded, 34 cached, 0 failed
+  Rules: 254 parsed, 231 convertible
+  Skipped: 15 (unsupported fields), 8 (unsupported features)
+  LOLBins enriched: 176
+  Top skip reasons: feature:re: 8, field:Initiated: 4, field:Description: 3
+```
 
 ## Анализ покрытия
 
@@ -288,9 +382,11 @@ Total LOLBins in LOLBAS:    227
 Covered in config:          97
 Missing from config:        130
 Coverage:                   42.7%
+CMD Rules:                  85
+Fallback rules:             97
 ```
 
-LOLBin считается "покрытым", если его `Name` или `OriginalFileName` присутствует в любом правиле конфигурации (теги Image, OriginalFileName, SourceImage или TargetImage).
+LOLBin считается "покрытым", если его `Name` или `OriginalFileName` присутствует в любом правиле конфигурации (теги Image, OriginalFileName, SourceImage, TargetImage или ImageLoaded).
 
 ## Логика дедупликации
 
@@ -363,6 +459,8 @@ GitHub Actions автоматически запускается при кажд
 ## Благодарности
 
 - [LOLBAS Project](https://lolbas-project.github.io/) — Living Off The Land Binaries and Scripts
+- [Sigma Rules](https://github.com/SigmaHQ/sigma) — Generic Signature Format for SIEM Systems
+- [pySigma](https://github.com/SigmaHQ/pySigma) — Python-библиотека для обработки Sigma-правил
 - [MITRE ATT&CK](https://attack.mitre.org/) — Adversarial Tactics, Techniques, and Common Knowledge
 - [Sysmon](https://docs.microsoft.com/en-us/sysinternals/downloads/sysmon) — System Monitor от Microsoft Sysinternals
 - [Sysmon Modular](https://github.com/olafhartong/sysmon-modular) — Модульная конфигурация Sysmon
