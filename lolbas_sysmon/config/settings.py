@@ -29,7 +29,7 @@ class SigmaConfig:
     """Configuration for Sigma rule enrichment."""
 
     enabled: bool = True
-    cache_dir: str = "sigma_rules"
+    cache_dir: str = "cache_sigma_rules"
     auto_update: bool = True
     max_age_days: int = 7
 
