@@ -4,6 +4,7 @@ __pycache__/
 cache_*/
 logs.txt
 traceback.txt
+Release_message.md
 *.json
 *.xml
 *.env
