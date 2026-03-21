@@ -21,7 +21,8 @@ ImageLoad rules are only generated for LOLBins with .dll extension.
 from lxml import etree
 
 from lolbas_sysmon.config import Config, logger
-from lolbas_sysmon.models import LOLBin, MitreInfo
+from lolbas_sysmon.models import LOLBin, MitreInfo, SigmaDetectionRule, SigmaRuleBranch
+from lolbas_sysmon.services.sigma_converter import LOGSOURCE_MAP
 
 # Event types that support CommandLine field
 CMDLINE_SUPPORTED_EVENTS = {"ProcessCreate"}
@@ -104,17 +105,23 @@ class SysmonRuleGenerator:
         Returns:
             Normalized lowercase key like "originalfilename:cmd.exe" or "image:\\cmd.exe"
         """
+        tag_name, _, value = self._resolve_executable_condition(lolbin, event_type)
+        return f"{tag_name.lower()}:{value.lower()}"
+
+    def _resolve_executable_condition(self, lolbin: LOLBin, event_type: str) -> tuple[str, str, str]:
+        """Resolve the executable condition tag/value pair for a LOLBin/event type."""
         preferred_tag, fallback_tag = self.config.get_condition_tags(event_type)
 
         if preferred_tag == "OriginalFileName" and lolbin.original_filename:
-            return f"originalfilename:{lolbin.original_filename.lower()}"
-        elif preferred_tag == "ImageLoaded":
-            return f"imageloaded:\\{lolbin.name.lower()}"
-        else:
-            tag_name = fallback_tag if preferred_tag == "OriginalFileName" else preferred_tag
-            if tag_name is None:
-                tag_name = "Image"
-            return f"{tag_name.lower()}:\\{lolbin.name.lower()}"
+            return ("OriginalFileName", "is", lolbin.original_filename)
+        if preferred_tag == "ImageLoaded":
+            return ("ImageLoaded", "end with", f"\\{lolbin.name}")
+
+        tag_name = fallback_tag if preferred_tag == "OriginalFileName" else preferred_tag
+        if tag_name is None:
+            tag_name = "Image"
+
+        return (tag_name, "end with", f"\\{lolbin.name}")
 
     def _get_flags_key(self, flags: list[str]) -> str:
         """
@@ -247,12 +254,12 @@ class SysmonRuleGenerator:
                 self.logger.debug(f"Skipping CMD rules for category '{category}' event '{event_type}': does not support CommandLine")
                 continue
 
-            # Filter LOLBins for this event type (e.g., DLLs only for ImageLoad)
             filtered_lolbins = self._filter_lolbins_for_event_type(lolbins, event_type)
             if not filtered_lolbins:
                 continue
 
             event_element = etree.SubElement(rule_group, event_type, onmatch="include")
+            event_element_exclude: etree._Element | None = None
             rules_added = 0
             rules_skipped = 0
 
@@ -261,20 +268,38 @@ class SysmonRuleGenerator:
                 rule_element = None
 
                 if with_cmdline:
-                    flags = lolbin.get_command_flags_for_category(category)
-                    if not flags:
+                    include_rules, exclude_rules, used_sigma_rules = self._generate_cmdline_rules(lolbin, category, event_type)
+                    if not include_rules and not exclude_rules:
                         continue
 
-                    flags_key = self._get_flags_key(flags)
+                    for idx, inc_rule in enumerate(include_rules):
+                        flags_key = self._get_cmd_dedup_key(inc_rule)
 
-                    if unique_rules and self._is_cmd_rule_duplicate(executable_key, event_type, flags_key):
-                        self.logger.debug(f"Skipping duplicate CMD rule: {lolbin.name} (event_type={event_type}, flags={flags_key})")
-                        rules_skipped += 1
-                        continue
+                        if unique_rules and self._is_cmd_rule_duplicate(executable_key, event_type, flags_key):
+                            self.logger.debug(f"Skipping duplicate CMD rule: {lolbin.name} (event_type={event_type}, flags={flags_key})")
+                            rules_skipped += 1
+                            continue
 
-                    rule_element = self._generate_cmdline_rule(lolbin, category, event_type)
-                    if rule_element is not None and unique_rules:
-                        self._mark_cmd_rule_generated(executable_key, event_type, flags_key)
+                        if unique_rules:
+                            self._mark_cmd_rule_generated(executable_key, event_type, flags_key)
+
+                        if used_sigma_rules and idx < len(used_sigma_rules):
+                            comment_text = self._create_sigma_comment(used_sigma_rules[idx])
+                        else:
+                            description = lolbin.get_description_for_category(category)
+                            comment_text = self._sanitize_comment(description) if description else None
+
+                        if comment_text:
+                            comment = etree.Comment(f" {comment_text} ")
+                            event_element.append(comment)
+                        event_element.append(inc_rule)
+                        rules_added += 1
+
+                    if exclude_rules:
+                        if event_element_exclude is None:
+                            event_element_exclude = etree.SubElement(rule_group, event_type, onmatch="exclude")
+                        for exc_rule in exclude_rules:
+                            event_element_exclude.append(exc_rule)
                 else:
                     if unique_rules and self._is_fallback_rule_duplicate(executable_key, event_type):
                         self.logger.debug(f"Skipping duplicate fallback rule: {lolbin.name} (event_type={event_type})")
@@ -285,7 +310,7 @@ class SysmonRuleGenerator:
                     if rule_element is not None and unique_rules:
                         self._mark_fallback_rule_generated(executable_key, event_type)
 
-                if rule_element is not None:
+                if not with_cmdline and rule_element is not None:
                     description = lolbin.get_description_for_category(category)
                     if description:
                         comment = etree.Comment(f" {self._sanitize_comment(description)} ")
@@ -293,9 +318,10 @@ class SysmonRuleGenerator:
                     event_element.append(rule_element)
                     rules_added += 1
 
-            # Remove empty event element
             if rules_added == 0:
                 rule_group.remove(event_element)
+                if event_element_exclude is not None:
+                    rule_group.remove(event_element_exclude)
             else:
                 total_rules_added += rules_added
                 rule_type = "CommandLine" if with_cmdline else "fallback"
@@ -308,6 +334,23 @@ class SysmonRuleGenerator:
             return None
 
         return rule_group
+
+    def _get_cmd_dedup_key(self, rule_element: etree._Element) -> str:
+        """Build deduplication key for CMD-like rules from all children.
+
+        This is robust for Sigma-based rules that may not always contain
+        CommandLine fields.
+        """
+        parts: list[str] = []
+        for child in rule_element:
+            if not isinstance(child.tag, str):
+                continue
+            text = (child.text or "").strip().lower()
+            cond = (child.get("condition") or "").strip().lower()
+            parts.append(f"{child.tag.lower()}|{cond}|{text}")
+        if not parts:
+            return "empty"
+        return self._get_flags_key(parts)
 
     def generate_all_rule_groups(
         self,
@@ -334,7 +377,6 @@ class SysmonRuleGenerator:
 
         rule_groups: list[etree._Element] = []
 
-        # Generate CommandLine rules first (more specific)
         if rule_type in ("cmd", "both"):
             for category, lolbins in lolbins_by_category.items():
                 if lolbins:
@@ -342,7 +384,6 @@ class SysmonRuleGenerator:
                     if cmd_group is not None:
                         rule_groups.append(cmd_group)
 
-        # Generate fallback rules second
         if rule_type in ("fallback", "both"):
             for category, lolbins in lolbins_by_category.items():
                 if lolbins:
@@ -389,23 +430,9 @@ class SysmonRuleGenerator:
         Returns:
             XML element for the detection rule.
         """
-        preferred_tag, fallback_tag = self.config.get_condition_tags(event_type)
-
-        if preferred_tag == "OriginalFileName" and lolbin.original_filename:
-            rule = etree.Element("OriginalFileName", condition="is")
-            rule.text = lolbin.original_filename
-        elif preferred_tag == "ImageLoaded":
-            rule = etree.Element("ImageLoaded", condition="end with")
-            rule.text = f"\\{lolbin.name}"
-        elif preferred_tag in ("SourceImage", "Image") or fallback_tag:
-            tag_name = fallback_tag if preferred_tag == "OriginalFileName" else preferred_tag
-            if tag_name is None:
-                tag_name = "Image"
-            rule = etree.Element(tag_name, condition="end with")
-            rule.text = f"\\{lolbin.name}"
-        else:
-            rule = etree.Element(preferred_tag, condition="end with")
-            rule.text = f"\\{lolbin.name}"
+        tag_name, condition, value = self._resolve_executable_condition(lolbin, event_type)
+        rule = etree.Element(tag_name, condition=condition)
+        rule.text = value
 
         mitre_infos = lolbin.get_mitre_info_for_category(category, self.mitre_technique_names)
         if mitre_infos:
@@ -413,13 +440,18 @@ class SysmonRuleGenerator:
 
         return rule
 
-    def _generate_cmdline_rule(self, lolbin: LOLBin, category: str, event_type: str) -> etree._Element | None:
+    def _generate_cmdline_rules(
+        self,
+        lolbin: LOLBin,
+        category: str,
+        event_type: str,
+    ) -> tuple[list[etree._Element], list[etree._Element], list[SigmaDetectionRule]]:
         """
-        Generate a CommandLine rule with executable + flag matching.
+        Generate CommandLine rules with executable + flag matching.
 
-        Creates a compound rule (groupRelation="and") that matches both
-        the executable and specific command-line flags extracted from
-        LOLBAS command examples.
+        Creates compound rules (groupRelation="and") that match both
+        the executable and specific command-line flags. Uses Sigma rules
+        if available (priority), otherwise falls back to LOLBAS command examples.
 
         Args:
             lolbin: LOLBin object to generate rule for.
@@ -427,13 +459,22 @@ class SysmonRuleGenerator:
             event_type: Sysmon event type for determining condition tags.
 
         Returns:
-            Rule XML element, or None if no flags found for category.
+            Tuple: (include_rules, exclude_rules, used_sigma_rules).
         """
+        sigma_rules = self._get_sigma_rules_for_event(lolbin, event_type)
+        if sigma_rules:
+            all_include: list[etree._Element] = []
+            all_exclude: list[etree._Element] = []
+            for sigma_rule in sigma_rules:
+                inc, exc = self._generate_sigma_rules(sigma_rule)
+                all_include.extend(inc)
+                all_exclude.extend(exc)
+            if all_include or all_exclude:
+                return all_include, all_exclude, sigma_rules
+
         flags = lolbin.get_command_flags_for_category(category)
         if not flags:
-            return None
-
-        preferred_tag, fallback_tag = self.config.get_condition_tags(event_type)
+            return [], [], []
 
         rule = etree.Element("Rule", groupRelation="and")
 
@@ -441,23 +482,112 @@ class SysmonRuleGenerator:
         if mitre_infos:
             rule.set("name", self._create_mitre_attribute(mitre_infos))
 
-        if preferred_tag == "OriginalFileName" and lolbin.original_filename:
-            image_elem = etree.SubElement(rule, "OriginalFileName", condition="is")
-            image_elem.text = lolbin.original_filename
-        elif preferred_tag in ("SourceImage", "Image") or fallback_tag:
-            tag_name = fallback_tag if preferred_tag == "OriginalFileName" else preferred_tag
-            if tag_name is None:
-                tag_name = "Image"
-            image_elem = etree.SubElement(rule, tag_name, condition="end with")
-            image_elem.text = f"\\{lolbin.name}"
-        else:
-            image_elem = etree.SubElement(rule, preferred_tag, condition="end with")
-            image_elem.text = f"\\{lolbin.name}"
+        tag_name, condition, value = self._resolve_executable_condition(lolbin, event_type)
+        image_elem = etree.SubElement(rule, tag_name, condition=condition)
+        image_elem.text = value
 
         cmdline_elem = etree.SubElement(rule, "CommandLine", condition="contains any")
         cmdline_elem.text = ";".join(flags)
 
+        return [rule], [], []
+
+    def _get_sigma_rules_for_event(self, lolbin: LOLBin, event_type: str) -> list[SigmaDetectionRule]:
+        """Return all convertible Sigma rules that match the target Sysmon event type."""
+        if not lolbin.has_sigma_rules():
+            return []
+
+        matching_rules: list[SigmaDetectionRule] = []
+        for sigma_rule in lolbin.get_convertible_sigma_rules():
+            sigma_event_type = LOGSOURCE_MAP.get(sigma_rule.logsource_category)
+            if sigma_event_type == event_type:
+                matching_rules.append(sigma_rule)
+
+        return matching_rules
+
+    def _generate_sigma_rules(self, sigma_rule: SigmaDetectionRule) -> tuple[list[etree._Element], list[etree._Element]]:
+        """Generate include/exclude Sysmon rules from Sigma branches."""
+        if not sigma_rule.is_convertible():
+            return [], []
+
+        blocks_by_name = {b.name: b for b in sigma_rule.detection_blocks}
+        branches = sigma_rule.branches
+        if not branches:
+            # Backward safety: OR across all blocks if no parsed branches
+            branches = [SigmaRuleBranch(include_blocks=[block.name]) for block in sigma_rule.detection_blocks]
+
+        include_rules: list[etree._Element] = []
+        exclude_rules: list[etree._Element] = []
+        mitre_infos = sigma_rule.get_mitre_info(self.mitre_technique_names)
+
+        for branch in branches:
+            include_conditions: list = []
+            exclude_conditions: list = []
+
+            for block_name in branch.include_blocks:
+                block = blocks_by_name.get(block_name)
+                if block:
+                    include_conditions.extend(block.conditions)
+
+            for block_name in branch.exclude_blocks:
+                block = blocks_by_name.get(block_name)
+                if block:
+                    exclude_conditions.extend(block.conditions)
+
+            if not include_conditions:
+                continue
+
+            include_rule = self._build_sigma_rule_from_conditions(include_conditions, mitre_infos)
+            if include_rule is not None:
+                include_rules.append(include_rule)
+
+            if exclude_conditions:
+                # A and not B => include(A), exclude(A and B)
+                exclude_rule = self._build_sigma_rule_from_conditions(include_conditions + exclude_conditions, mitre_infos)
+                if exclude_rule is not None:
+                    exclude_rules.append(exclude_rule)
+
+        return include_rules, exclude_rules
+
+    def _build_sigma_rule_from_conditions(
+        self,
+        conditions,
+        mitre_infos: list[MitreInfo],
+    ) -> etree._Element | None:
+        rule = etree.Element("Rule", groupRelation="and")
+        if mitre_infos:
+            rule.set("name", self._create_mitre_attribute(mitre_infos))
+
+        for cond in conditions:
+            if cond.negated:
+                # Negation is represented at branch level (exclude section)
+                continue
+            if not cond.values:
+                continue
+            condition = self._sigma_condition_to_sysmon(cond.modifier)
+            elem = etree.SubElement(rule, cond.field, condition=condition)
+            elem.text = self._format_values_for_condition(cond.values, condition)
+
+        if len(rule) == 0:
+            return None
         return rule
+
+    def _sigma_condition_to_sysmon(self, modifier: str) -> str:
+        """Map Sigma modifier to Sysmon condition attribute."""
+        mapping = {
+            "is": "is",
+            "contains": "contains",
+            "begin with": "begin with",
+            "end with": "end with",
+            "contains all": "contains all",
+            "contains any": "contains any",
+        }
+        return mapping.get(modifier, "is")
+
+    def _format_values_for_condition(self, values: list[str], condition: str) -> str:
+        """Format Sigma values for Sysmon XML text."""
+        if condition in ("contains any", "contains all"):
+            return ";".join(values)
+        return values[0]
 
     def _sanitize_comment(self, text: str) -> str:
         """
@@ -478,6 +608,24 @@ class SysmonRuleGenerator:
         if sanitized.endswith("-"):
             sanitized = sanitized[:-1] + "—"
         return sanitized
+
+    def _create_sigma_comment(self, sigma_rule: SigmaDetectionRule) -> str:
+        """
+        Create XML comment text from Sigma rule metadata.
+
+        Args:
+            sigma_rule: Sigma rule with title, level, rule_id.
+
+        Returns:
+            Formatted comment string with Sigma metadata.
+        """
+        parts = [f"Sigma: {sigma_rule.title}"]
+        if sigma_rule.level:
+            parts.append(f"Level: {sigma_rule.level}")
+        if sigma_rule.rule_id:
+            parts.append(f"ID: {sigma_rule.rule_id}")
+        comment = " | ".join(parts)
+        return self._sanitize_comment(comment)
 
     def _create_mitre_attribute(self, mitre_infos: list[MitreInfo]) -> str:
         """
