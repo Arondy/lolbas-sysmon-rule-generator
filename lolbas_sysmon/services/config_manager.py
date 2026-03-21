@@ -354,6 +354,32 @@ class SysmonConfigManager:
 
         return (exec_name, flags)
 
+    def _iter_rule_items(self, section: etree._Element) -> list[tuple[etree._Comment | None, etree._Element]]:
+        """Iterate section children as (optional_comment, rule_element) items."""
+        items: list[tuple[etree._Comment | None, etree._Element]] = []
+        children = list(section)
+        i = 0
+
+        while i < len(children):
+            child = children[i]
+
+            if isinstance(child, etree._Comment):
+                if i + 1 < len(children):
+                    next_child = children[i + 1]
+                    if isinstance(next_child.tag, str):
+                        items.append((child, next_child))
+                        i += 2
+                        continue
+                i += 1
+                continue
+
+            if isinstance(child.tag, str):
+                items.append((None, child))
+
+            i += 1
+
+        return items
+
     def _filter_new_rules(
         self,
         new_section: etree._Element,
@@ -382,49 +408,20 @@ class SysmonConfigManager:
         added = 0
         skipped = 0
 
-        children = list(new_section)
-        i = 0
-        while i < len(children):
-            child = children[i]
+        for comment, rule_elem in self._iter_rule_items(new_section):
+            is_dup, exec_name, flags_str = self._is_duplicate(rule_elem, existing_executables, existing_cmdline_rules, is_cmdline_group)
+            if is_dup and not force:
+                skipped += 1
+                self._log_skip(exec_name, flags_str)
+                continue
 
-            if isinstance(child, etree._Comment):
-                if i + 1 < len(children):
-                    next_child = children[i + 1]
-                    if isinstance(next_child.tag, str):
-                        is_dup, exec_name, flags_str = self._is_duplicate(next_child, existing_executables, existing_cmdline_rules, is_cmdline_group)
-                        if is_dup:
-                            if force:
-                                filtered.append(child)
-                                filtered.append(next_child)
-                                added += 1
-                                self.logger.debug(f"Will replace rule for {exec_name}")
-                            else:
-                                skipped += 1
-                                self._log_skip(exec_name, flags_str)
-                            i += 2
-                            continue
-                        filtered.append(child)
-                        filtered.append(next_child)
-                        added += 1
-                        i += 2
-                        continue
-                i += 1
-            elif isinstance(child.tag, str):
-                is_dup, exec_name, flags_str = self._is_duplicate(child, existing_executables, existing_cmdline_rules, is_cmdline_group)
-                if is_dup:
-                    if force:
-                        filtered.append(child)
-                        added += 1
-                        self.logger.debug(f"Will replace rule for {exec_name}")
-                    else:
-                        skipped += 1
-                        self._log_skip(exec_name, flags_str)
-                else:
-                    filtered.append(child)
-                    added += 1
-                i += 1
-            else:
-                i += 1
+            if comment is not None:
+                filtered.append(comment)
+            filtered.append(rule_elem)
+            added += 1
+
+            if is_dup and force:
+                self.logger.debug(f"Will replace rule for {exec_name}")
 
         return (filtered, added, skipped)
 
@@ -470,51 +467,21 @@ class SysmonConfigManager:
         added = 0
         skipped = 0
 
-        children = list(new_section)
-        i = 0
-        while i < len(children):
-            child = children[i]
+        for comment, rule_elem in self._iter_rule_items(new_section):
+            is_dup, exec_name, flags_str = self._is_duplicate(rule_elem, existing_executables, existing_cmdline_rules, is_cmdline_group)
+            if is_dup and not force:
+                skipped += 1
+                self._log_skip(exec_name, flags_str)
+                continue
 
-            if isinstance(child, etree._Comment):
-                if i + 1 < len(children):
-                    next_child = children[i + 1]
-                    if isinstance(next_child.tag, str):
-                        is_dup, exec_name, flags_str = self._is_duplicate(next_child, existing_executables, existing_cmdline_rules, is_cmdline_group)
-                        if is_dup:
-                            if force:
-                                self._remove_existing_rule_globally(exec_name, is_cmdline_group, next_child)
-                                existing_section.append(child)
-                                existing_section.append(next_child)
-                                added += 1
-                                self.logger.debug(f"Replaced rule for {exec_name}")
-                            else:
-                                skipped += 1
-                                self._log_skip(exec_name, flags_str)
-                            i += 2
-                            continue
-                        existing_section.append(child)
-                        existing_section.append(next_child)
-                        added += 1
-                        i += 2
-                        continue
-                i += 1
-            elif isinstance(child.tag, str):
-                is_dup, exec_name, flags_str = self._is_duplicate(child, existing_executables, existing_cmdline_rules, is_cmdline_group)
-                if is_dup:
-                    if force:
-                        self._remove_existing_rule_globally(exec_name, is_cmdline_group, child)
-                        existing_section.append(child)
-                        added += 1
-                        self.logger.debug(f"Replaced rule for {exec_name}")
-                    else:
-                        skipped += 1
-                        self._log_skip(exec_name, flags_str)
-                else:
-                    existing_section.append(child)
-                    added += 1
-                i += 1
-            else:
-                i += 1
+            if is_dup and force:
+                self._remove_existing_rule_globally(exec_name, is_cmdline_group, rule_elem)
+                self.logger.debug(f"Replaced rule for {exec_name}")
+
+            if comment is not None:
+                existing_section.append(comment)
+            existing_section.append(rule_elem)
+            added += 1
 
         return (added, skipped)
 

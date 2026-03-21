@@ -97,6 +97,16 @@ class LOLBASParser:
             if attack.get("ID"):
                 mitre_ids.append(attack.get("ID"))
 
+        detection_urls: list[str] = []
+        for detection in item.get("Detection", []) or []:
+            if detection.get("Sigma"):
+                detection_urls.append(detection["Sigma"])
+
         return LOLBin(
-            name=name, original_filename=item.get("OriginalFileName"), description=item.get("Description", ""), commands=commands, mitre_ids=mitre_ids
+            name=name,
+            original_filename=item.get("OriginalFileName"),
+            description=item.get("Description", ""),
+            commands=commands,
+            mitre_ids=mitre_ids,
+            detection_urls=detection_urls,
         )
