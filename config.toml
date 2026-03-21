@@ -117,14 +117,35 @@ unique_rules = false
 # LOLBAS Data Source Configuration.
 # The tool will first check for a local JSON file, then fetch from URL if needed.
 # Fetched data is automatically cached to the json_file path.
+# If auto_update is enabled, cached file older than max_age_days is refreshed.
 
 json_file = "lolbas.json"
 url = "https://lolbas-project.github.io/api/lolbas.json"
+auto_update = true
+max_age_days = 28
 
 [mitre]
 # MITRE ATT&CK Data Source Configuration.
 # Used to enrich rules with human-readable technique names.
 # The STIX bundle is large (~30MB), so local caching is recommended.
+# If auto_update is enabled, cached file older than max_age_days is refreshed.
 
 json_file = "enterprise-attack.json"
 url = "https://raw.githubusercontent.com/mitre/cti/master/enterprise-attack/enterprise-attack.json"
+auto_update = true
+max_age_days = 28
+
+[sigma]
+# Sigma Rule Enrichment Configuration.
+# When enabled, the tool downloads and parses Sigma detection rules
+# referenced in LOLBAS Detection sections to generate more precise
+# CommandLine rules.
+#
+# Sigma rules take priority over extracted flags from command examples.
+# Downloaded rules are cached locally in cache_dir.
+# If auto_update is enabled, cached file older than max_age_days is refreshed.
+
+enabled = true
+cache_dir = "cache_sigma_rules"
+auto_update = true
+max_age_days = 28

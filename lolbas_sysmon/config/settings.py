@@ -12,12 +12,26 @@ DEFAULT_CONFIG_PATH = "config.toml"
 class LolbasConfig:
     json_file: str = "lolbas.json"
     url: str = "https://lolbas-project.github.io/api/lolbas.json"
+    auto_update: bool = True
+    max_age_days: int = 7
 
 
 @dataclass
 class MitreConfig:
     json_file: str = "enterprise-attack.json"
     url: str = "https://raw.githubusercontent.com/mitre/cti/master/enterprise-attack/enterprise-attack.json"
+    auto_update: bool = True
+    max_age_days: int = 7
+
+
+@dataclass
+class SigmaConfig:
+    """Configuration for Sigma rule enrichment."""
+
+    enabled: bool = True
+    cache_dir: str = "sigma_rules"
+    auto_update: bool = True
+    max_age_days: int = 7
 
 
 @dataclass
@@ -30,6 +44,7 @@ class Config:
     unique_rules: bool = False
     lolbas: LolbasConfig = field(default_factory=LolbasConfig)
     mitre: MitreConfig = field(default_factory=MitreConfig)
+    sigma: SigmaConfig = field(default_factory=SigmaConfig)
 
     def get_event_types(self, category: str) -> list[str]:
         """Get all event types for a category."""
@@ -91,6 +106,8 @@ class ConfigLoader:
             config.lolbas = LolbasConfig(
                 json_file=lolbas_data.get("json_file", "lolbas.json"),
                 url=lolbas_data.get("url", "https://lolbas-project.github.io/api/lolbas.json"),
+                auto_update=lolbas_data.get("auto_update", True),
+                max_age_days=lolbas_data.get("max_age_days", 7),
             )
 
         if "mitre" in data:
@@ -98,6 +115,17 @@ class ConfigLoader:
             config.mitre = MitreConfig(
                 json_file=mitre_data.get("json_file", "enterprise-attack.json"),
                 url=mitre_data.get("url", "https://raw.githubusercontent.com/mitre/cti/master/enterprise-attack/enterprise-attack.json"),
+                auto_update=mitre_data.get("auto_update", True),
+                max_age_days=mitre_data.get("max_age_days", 7),
+            )
+
+        if "sigma" in data:
+            sigma_data = data["sigma"]
+            config.sigma = SigmaConfig(
+                enabled=sigma_data.get("enabled", True),
+                cache_dir=sigma_data.get("cache_dir", "cache_sigma_rules"),
+                auto_update=sigma_data.get("auto_update", True),
+                max_age_days=sigma_data.get("max_age_days", 7),
             )
 
         return config
