@@ -539,6 +539,7 @@ class CLI:
                 continue
 
             lolbin_got_rule = False
+            seen_sigma_signatures: set[tuple[str, str, str]] = set()
 
             for url in lolbin.detection_urls:
                 if not SigmaClient.is_sigma_url(url):
@@ -569,6 +570,15 @@ class CLI:
                 stats.rules_parsed += 1
 
                 if sigma_converter.is_rule_convertible(sigma_rule):
+                    signature = (
+                        sigma_rule.rule_id,
+                        sigma_rule.title,
+                        sigma_rule.condition_expr,
+                    )
+                    if signature in seen_sigma_signatures:
+                        continue
+                    seen_sigma_signatures.add(signature)
+
                     stats.rules_convertible += 1
                     lolbin.sigma_rules.append(sigma_rule)
                     lolbin_got_rule = True

@@ -129,9 +129,10 @@ class SigmaConverter:
             return None
 
         detection_raw = raw_yaml.get("detection") or {}
-        blocks, unsupported_fields, unsupported_features = self._parse_detection_blocks(detection_raw)
+        blocks, unsupported_fields, unsupported_features, block_aliases = self._parse_detection_blocks(detection_raw)
         condition_expr = str(detection_raw.get("condition", "")).strip()
-        branches, condition_issues = self._parse_condition_to_branches(condition_expr, set(blocks.keys()))
+        branches, condition_issues = self._parse_condition_to_branches(condition_expr, set(block_aliases.keys()))
+        branches = self._expand_alias_branches(branches, block_aliases)
         unsupported_features.extend(condition_issues)
         unsupported_features = list(dict.fromkeys(unsupported_features))
 
@@ -154,20 +155,100 @@ class SigmaConverter:
 
         return rule
 
-    def _parse_detection_blocks(self, detection_raw: dict) -> tuple[dict[str, SigmaDetectionBlock], list[str], list[str]]:
+    def _parse_detection_blocks(
+        self,
+        detection_raw: dict,
+    ) -> tuple[dict[str, SigmaDetectionBlock], list[str], list[str], dict[str, list[str]]]:
         blocks: dict[str, SigmaDetectionBlock] = {}
         unsupported_fields: list[str] = []
         unsupported_features: list[str] = []
+        block_aliases: dict[str, list[str]] = {}
 
         for key, value in detection_raw.items():
             if key == "condition":
                 continue
 
+            # In Sigma, a list of maps under one block means OR between items.
+            # We model this by creating virtual sub-blocks and later expanding
+            # condition branches through alias cartesian expansion.
+            if isinstance(value, list):
+                expanded_names: list[str] = []
+                for idx, item in enumerate(value):
+                    conds = self._extract_conditions(item, unsupported_fields, unsupported_features)
+                    if not conds:
+                        continue
+                    sub_name = f"{key}_{idx}"
+                    blocks[sub_name] = SigmaDetectionBlock(name=sub_name, conditions=conds)
+                    expanded_names.append(sub_name)
+                if expanded_names:
+                    block_aliases[key] = expanded_names
+                continue
+
             conds = self._extract_conditions(value, unsupported_fields, unsupported_features)
             if conds:
                 blocks[key] = SigmaDetectionBlock(name=key, conditions=conds)
+                block_aliases[key] = [key]
 
-        return blocks, list(dict.fromkeys(unsupported_fields)), list(dict.fromkeys(unsupported_features))
+        return blocks, list(dict.fromkeys(unsupported_fields)), list(dict.fromkeys(unsupported_features)), block_aliases
+
+    def _expand_alias_branches(
+        self,
+        branches: list[SigmaRuleBranch],
+        block_aliases: dict[str, list[str]],
+    ) -> list[SigmaRuleBranch]:
+        """Expand alias block names to concrete virtual blocks.
+
+        Example:
+          selection_img -> [selection_img_0, selection_img_1]
+        A branch with include [selection_img, selection_cli] becomes two branches:
+          [selection_img_0, selection_cli]
+          [selection_img_1, selection_cli]
+        """
+        expanded: list[SigmaRuleBranch] = []
+
+        for branch in branches:
+            variants: list[SigmaRuleBranch] = [SigmaRuleBranch(include_blocks=[], exclude_blocks=[])]
+
+            for alias in branch.include_blocks:
+                options = block_aliases.get(alias, [alias])
+                next_variants: list[SigmaRuleBranch] = []
+                for v in variants:
+                    for opt in options:
+                        next_variants.append(
+                            SigmaRuleBranch(
+                                include_blocks=v.include_blocks + [opt],
+                                exclude_blocks=v.exclude_blocks,
+                            )
+                        )
+                variants = next_variants
+
+            for alias in branch.exclude_blocks:
+                options = block_aliases.get(alias, [alias])
+                next_variants = []
+                for v in variants:
+                    for opt in options:
+                        next_variants.append(
+                            SigmaRuleBranch(
+                                include_blocks=v.include_blocks,
+                                exclude_blocks=v.exclude_blocks + [opt],
+                            )
+                        )
+                variants = next_variants
+
+            expanded.extend(variants)
+
+        # Normalize and deduplicate
+        out: list[SigmaRuleBranch] = []
+        seen: set[tuple[tuple[str, ...], tuple[str, ...]]] = set()
+        for b in expanded:
+            inc = tuple(dict.fromkeys(b.include_blocks))
+            exc = tuple(dict.fromkeys(b.exclude_blocks))
+            key = (inc, exc)
+            if key in seen:
+                continue
+            seen.add(key)
+            out.append(SigmaRuleBranch(include_blocks=list(inc), exclude_blocks=list(exc)))
+        return out
 
     def _extract_conditions(self, node, unsupported_fields: list[str], unsupported_features: list[str]) -> list[SigmaCondition]:
         conditions: list[SigmaCondition] = []
@@ -195,11 +276,17 @@ class SigmaConverter:
                 if not values:
                     continue
 
+                # If Sigma lists multiple values with a simple "contains" modifier,
+                # interpret it as "contains any" to preserve the OR semantics.
+                if modifier == "contains" and len(values) > 1:
+                    modifier = "contains any"
+
                 conditions.append(SigmaCondition(field=mapped, modifier=modifier, values=values))
 
         elif isinstance(node, list):
             for item in node:
-                # List here is treated as OR in Sigma; keep flattened values at conversion stage.
+                # List handling at block-level is performed in _parse_detection_blocks.
+                # Here we only flatten nested scalar lists that belong to a field value.
                 conditions.extend(self._extract_conditions(item, unsupported_fields, unsupported_features))
 
         return conditions

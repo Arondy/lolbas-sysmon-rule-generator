@@ -30,6 +30,9 @@ CMDLINE_SUPPORTED_EVENTS = {"ProcessCreate"}
 # Event types that require DLL-only LOLBins
 DLL_ONLY_EVENTS = {"ImageLoad"}
 
+# Tags treated as executable identity selectors for Sigma process rules.
+SIGMA_EXECUTABLE_BIND_TAGS = {"Image", "OriginalFileName"}
+
 
 class SysmonRuleGenerator:
     """
@@ -262,44 +265,50 @@ class SysmonRuleGenerator:
             event_element_exclude: etree._Element | None = None
             rules_added = 0
             rules_skipped = 0
+            # Always deduplicate exact XML-equivalent CMD rules within one event section.
+            # This prevents repeated Sigma branches when the same Sigma rule URL appears
+            # across multiple LOLBins in the same category.
+            event_include_cmd_signatures: set[str] = set()
+            event_exclude_cmd_signatures: set[str] = set()
+            merged_include_rules: dict[str, etree._Element] = {}
+            merged_include_comments: dict[str, str | None] = {}
+            merged_include_order: list[str] = []
+            merged_exclude_rules: dict[str, etree._Element] = {}
+            merged_exclude_order: list[str] = []
 
             for lolbin in filtered_lolbins:
                 executable_key = self._get_executable_key(lolbin, event_type)
                 rule_element = None
 
                 if with_cmdline:
-                    include_rules, exclude_rules, used_sigma_rules = self._generate_cmdline_rules(lolbin, category, event_type)
+                    include_rules, exclude_rules, include_comments = self._generate_cmdline_rules(lolbin, category, event_type)
                     if not include_rules and not exclude_rules:
                         continue
 
                     for idx, inc_rule in enumerate(include_rules):
-                        flags_key = self._get_cmd_dedup_key(inc_rule)
-
-                        if unique_rules and self._is_cmd_rule_duplicate(executable_key, event_type, flags_key):
-                            self.logger.debug(f"Skipping duplicate CMD rule: {lolbin.name} (event_type={event_type}, flags={flags_key})")
-                            rules_skipped += 1
-                            continue
-
-                        if unique_rules:
-                            self._mark_cmd_rule_generated(executable_key, event_type, flags_key)
-
-                        if used_sigma_rules and idx < len(used_sigma_rules):
-                            comment_text = self._create_sigma_comment(used_sigma_rules[idx])
+                        if include_comments and idx < len(include_comments):
+                            comment_text = include_comments[idx]
                         else:
                             description = lolbin.get_description_for_category(category)
                             comment_text = self._sanitize_comment(description) if description else None
 
-                        if comment_text:
-                            comment = etree.Comment(f" {comment_text} ")
-                            event_element.append(comment)
-                        event_element.append(inc_rule)
-                        rules_added += 1
+                        merge_sig = self._get_rule_signature_without_executable(inc_rule)
+                        if merge_sig in merged_include_rules:
+                            self._merge_executable_selectors(merged_include_rules[merge_sig], inc_rule)
+                            continue
+
+                        merged_include_rules[merge_sig] = inc_rule
+                        merged_include_comments[merge_sig] = comment_text
+                        merged_include_order.append(merge_sig)
 
                     if exclude_rules:
-                        if event_element_exclude is None:
-                            event_element_exclude = etree.SubElement(rule_group, event_type, onmatch="exclude")
                         for exc_rule in exclude_rules:
-                            event_element_exclude.append(exc_rule)
+                            exc_merge_sig = self._get_rule_signature_without_executable(exc_rule)
+                            if exc_merge_sig in merged_exclude_rules:
+                                self._merge_executable_selectors(merged_exclude_rules[exc_merge_sig], exc_rule)
+                                continue
+                            merged_exclude_rules[exc_merge_sig] = exc_rule
+                            merged_exclude_order.append(exc_merge_sig)
                 else:
                     if unique_rules and self._is_fallback_rule_duplicate(executable_key, event_type):
                         self.logger.debug(f"Skipping duplicate fallback rule: {lolbin.name} (event_type={event_type})")
@@ -317,6 +326,41 @@ class SysmonRuleGenerator:
                         event_element.append(comment)
                     event_element.append(rule_element)
                     rules_added += 1
+
+            if with_cmdline:
+                for merge_sig in merged_include_order:
+                    inc_rule = merged_include_rules[merge_sig]
+                    flags_key = self._get_cmd_dedup_key(inc_rule)
+
+                    if flags_key in event_include_cmd_signatures:
+                        rules_skipped += 1
+                        self.logger.debug(f"Skipping duplicate CMD rule in section '{group_name}/{event_type}' (signature={flags_key})")
+                        continue
+
+                    if unique_rules and self._is_cmd_rule_duplicate("__merged__", event_type, flags_key):
+                        rules_skipped += 1
+                        continue
+
+                    event_include_cmd_signatures.add(flags_key)
+                    if unique_rules:
+                        self._mark_cmd_rule_generated("__merged__", event_type, flags_key)
+
+                    comment_text = merged_include_comments.get(merge_sig)
+                    if comment_text:
+                        event_element.append(etree.Comment(f" {comment_text} "))
+                    event_element.append(inc_rule)
+                    rules_added += 1
+
+                for exc_merge_sig in merged_exclude_order:
+                    exc_rule = merged_exclude_rules[exc_merge_sig]
+                    exc_key = self._get_cmd_dedup_key(exc_rule)
+                    if exc_key in event_exclude_cmd_signatures:
+                        continue
+                    event_exclude_cmd_signatures.add(exc_key)
+
+                    if event_element_exclude is None:
+                        event_element_exclude = etree.SubElement(rule_group, event_type, onmatch="exclude")
+                    event_element_exclude.append(exc_rule)
 
             if rules_added == 0:
                 rule_group.remove(event_element)
@@ -345,8 +389,13 @@ class SysmonRuleGenerator:
         for child in rule_element:
             if not isinstance(child.tag, str):
                 continue
-            text = (child.text or "").strip().lower()
             cond = (child.get("condition") or "").strip().lower()
+            text = (child.text or "").strip().lower()
+            if ";" in text:
+                # Normalize multi-value conditions where order is not semantically
+                # important to avoid duplicate branches that differ only by value order.
+                items = [x.strip() for x in text.split(";") if x.strip()]
+                text = ";".join(sorted(dict.fromkeys(items)))
             parts.append(f"{child.tag.lower()}|{cond}|{text}")
         if not parts:
             return "empty"
@@ -445,7 +494,7 @@ class SysmonRuleGenerator:
         lolbin: LOLBin,
         category: str,
         event_type: str,
-    ) -> tuple[list[etree._Element], list[etree._Element], list[SigmaDetectionRule]]:
+    ) -> tuple[list[etree._Element], list[etree._Element], list[str]]:
         """
         Generate CommandLine rules with executable + flag matching.
 
@@ -459,18 +508,24 @@ class SysmonRuleGenerator:
             event_type: Sysmon event type for determining condition tags.
 
         Returns:
-            Tuple: (include_rules, exclude_rules, used_sigma_rules).
+            Tuple: (include_rules, exclude_rules, include_comments).
         """
         sigma_rules = self._get_sigma_rules_for_event(lolbin, event_type)
         if sigma_rules:
             all_include: list[etree._Element] = []
             all_exclude: list[etree._Element] = []
+            include_comments: list[str] = []
             for sigma_rule in sigma_rules:
                 inc, exc = self._generate_sigma_rules(sigma_rule)
+                for inc_rule in inc:
+                    self._ensure_sigma_rule_bound_to_lolbin(inc_rule, lolbin, event_type)
+                for exc_rule in exc:
+                    self._ensure_sigma_rule_bound_to_lolbin(exc_rule, lolbin, event_type)
                 all_include.extend(inc)
                 all_exclude.extend(exc)
+                include_comments.extend(self._create_sigma_branch_comments(sigma_rule, len(inc)))
             if all_include or all_exclude:
-                return all_include, all_exclude, sigma_rules
+                return all_include, all_exclude, include_comments
 
         flags = lolbin.get_command_flags_for_category(category)
         if not flags:
@@ -491,18 +546,73 @@ class SysmonRuleGenerator:
 
         return [rule], [], []
 
+    def _create_sigma_branch_comments(self, sigma_rule: SigmaDetectionRule, branch_count: int) -> list[str]:
+        """Create per-branch comments for Sigma-expanded rules.
+
+        First branch gets full metadata comment, subsequent branches receive a
+        compact index marker for easier review (for example: "2 - <rule_id>").
+        """
+        if branch_count <= 0:
+            return []
+
+        comments = [self._create_sigma_comment(sigma_rule)]
+        if branch_count == 1:
+            return comments
+
+        rule_id = sigma_rule.rule_id or "no-id"
+        for idx in range(2, branch_count + 1):
+            comments.append(self._sanitize_comment(f"{idx} - {rule_id}"))
+
+        return comments
+
     def _get_sigma_rules_for_event(self, lolbin: LOLBin, event_type: str) -> list[SigmaDetectionRule]:
         """Return all convertible Sigma rules that match the target Sysmon event type."""
         if not lolbin.has_sigma_rules():
             return []
 
         matching_rules: list[SigmaDetectionRule] = []
+        seen_signatures: set[str] = set()
         for sigma_rule in lolbin.get_convertible_sigma_rules():
             sigma_event_type = LOGSOURCE_MAP.get(sigma_rule.logsource_category)
             if sigma_event_type == event_type:
+                signature = self._get_sigma_rule_signature(sigma_rule)
+                if signature in seen_signatures:
+                    continue
+                seen_signatures.add(signature)
                 matching_rules.append(sigma_rule)
 
         return matching_rules
+
+    def _get_sigma_rule_signature(self, sigma_rule: SigmaDetectionRule) -> str:
+        """Build a stable signature for deduplicating repeated Sigma rules.
+
+        LOLBAS detection lists can reference the same Sigma rule multiple times
+        (duplicate URLs, mirrors, or cached variants). We deduplicate rules by
+        semantic content to avoid generating the same branch set repeatedly.
+        """
+        branch_parts: list[str] = []
+        for branch in sigma_rule.branches:
+            inc = ",".join(sorted(dict.fromkeys(branch.include_blocks)))
+            exc = ",".join(sorted(dict.fromkeys(branch.exclude_blocks)))
+            branch_parts.append(f"inc:[{inc}]|exc:[{exc}]")
+
+        block_parts: list[str] = []
+        for block in sigma_rule.detection_blocks:
+            cond_parts: list[str] = []
+            for cond in block.conditions:
+                values = ";".join(cond.values)
+                cond_parts.append(f"{cond.field}|{cond.modifier}|{values}|neg={cond.negated}")
+            block_parts.append(f"{block.name}:" + "||".join(cond_parts))
+
+        key_parts = [
+            sigma_rule.rule_id or "",
+            sigma_rule.title or "",
+            sigma_rule.logsource_category or "",
+            sigma_rule.condition_expr or "",
+            "@@".join(sorted(branch_parts)),
+            "@@".join(sorted(block_parts)),
+        ]
+        return "###".join(key_parts)
 
     def _generate_sigma_rules(self, sigma_rule: SigmaDetectionRule) -> tuple[list[etree._Element], list[etree._Element]]:
         """Generate include/exclude Sysmon rules from Sigma branches."""
@@ -536,26 +646,40 @@ class SysmonRuleGenerator:
             if not include_conditions:
                 continue
 
-            include_rule = self._build_sigma_rule_from_conditions(include_conditions, mitre_infos)
-            if include_rule is not None:
-                include_rules.append(include_rule)
+            include_rules.extend(self._build_sigma_rules_from_conditions(include_conditions, mitre_infos))
 
             if exclude_conditions:
                 # A and not B => include(A), exclude(A and B)
-                exclude_rule = self._build_sigma_rule_from_conditions(include_conditions + exclude_conditions, mitre_infos)
-                if exclude_rule is not None:
-                    exclude_rules.append(exclude_rule)
+                exclude_rules.extend(self._build_sigma_rules_from_conditions(include_conditions + exclude_conditions, mitre_infos))
 
-        return include_rules, exclude_rules
+        return self._dedup_sigma_rules(include_rules), self._dedup_sigma_rules(exclude_rules)
 
-    def _build_sigma_rule_from_conditions(
+    def _dedup_sigma_rules(self, rules: list[etree._Element]) -> list[etree._Element]:
+        """Remove duplicate Sigma-generated rules within one conversion pass."""
+        deduped: list[etree._Element] = []
+        seen: set[str] = set()
+
+        for rule in rules:
+            sig = self._get_cmd_dedup_key(rule)
+            if sig in seen:
+                continue
+            seen.add(sig)
+            deduped.append(rule)
+
+        return deduped
+
+    def _build_sigma_rules_from_conditions(
         self,
         conditions,
         mitre_infos: list[MitreInfo],
-    ) -> etree._Element | None:
-        rule = etree.Element("Rule", groupRelation="and")
-        if mitre_infos:
-            rule.set("name", self._create_mitre_attribute(mitre_infos))
+    ) -> list[etree._Element]:
+        """Build one or more Sysmon rules from Sigma conditions.
+
+        Sigma lists such as "Image|endswith: [a, b]" are OR semantics.
+        For conditions that don't support packed multi-values in Sysmon,
+        expand them into multiple rule variants.
+        """
+        variants: list[list[tuple[str, str, str]]] = [[]]
 
         for cond in conditions:
             if cond.negated:
@@ -563,13 +687,109 @@ class SysmonRuleGenerator:
                 continue
             if not cond.values:
                 continue
-            condition = self._sigma_condition_to_sysmon(cond.modifier)
-            elem = etree.SubElement(rule, cond.field, condition=condition)
-            elem.text = self._format_values_for_condition(cond.values, condition)
 
-        if len(rule) == 0:
-            return None
-        return rule
+            sysmon_condition = self._sigma_condition_to_sysmon(cond.modifier)
+            value_options: list[str]
+
+            if sysmon_condition in ("contains any", "contains all"):
+                value_options = [self._format_values_for_condition(cond.values, sysmon_condition)]
+            else:
+                # Preserve OR semantics for non-packed conditions by branching.
+                value_options = cond.values
+
+            next_variants: list[list[tuple[str, str, str]]] = []
+            for variant in variants:
+                for value in value_options:
+                    next_variants.append(variant + [(cond.field, sysmon_condition, value)])
+            variants = next_variants
+
+        rules: list[etree._Element] = []
+        for variant in variants:
+            if not variant:
+                continue
+
+            rule = etree.Element("Rule", groupRelation="and")
+            if mitre_infos:
+                rule.set("name", self._create_mitre_attribute(mitre_infos))
+
+            for field, condition, value in variant:
+                elem = etree.SubElement(rule, field, condition=condition)
+                elem.text = value
+
+            if len(rule) > 0:
+                rules.append(rule)
+
+        return rules
+
+    def _ensure_sigma_rule_bound_to_lolbin(
+        self,
+        rule: etree._Element,
+        lolbin: LOLBin,
+        event_type: str,
+    ) -> None:
+        """Ensure Sigma-derived rule is scoped to the current LOLBin.
+
+        If the Sigma rule has no Image/OriginalFileName selector, add one
+        based on LOLBAS executable metadata to avoid overly broad matches.
+        """
+        if any(isinstance(child.tag, str) and child.tag in SIGMA_EXECUTABLE_BIND_TAGS for child in rule):
+            return
+
+        tag_name, condition, value = self._resolve_executable_condition(lolbin, event_type)
+        exec_elem = etree.Element(tag_name, condition=condition)
+        exec_elem.text = value
+        rule.insert(0, exec_elem)
+
+    def _get_rule_signature_without_executable(self, rule: etree._Element) -> str:
+        """Build a stable signature for grouping rules by non-executable logic."""
+        parts: list[str] = []
+        for child in rule:
+            if not isinstance(child.tag, str):
+                continue
+            if child.tag in SIGMA_EXECUTABLE_BIND_TAGS:
+                continue
+            cond = (child.get("condition") or "").strip().lower()
+            text = (child.text or "").strip().lower()
+            if ";" in text:
+                items = [x.strip() for x in text.split(";") if x.strip()]
+                text = ";".join(sorted(dict.fromkeys(items)))
+            parts.append(f"{child.tag.lower()}|{cond}|{text}")
+        if not parts:
+            return "only-executable"
+        return "||".join(sorted(parts))
+
+    def _merge_executable_selectors(self, target_rule: etree._Element, source_rule: etree._Element) -> None:
+        """Merge executable selectors from source_rule into target_rule as OR lists."""
+        for source_child in source_rule:
+            if not isinstance(source_child.tag, str):
+                continue
+            if source_child.tag not in SIGMA_EXECUTABLE_BIND_TAGS:
+                continue
+
+            source_cond = source_child.get("condition") or ""
+            source_text = (source_child.text or "").strip()
+            if not source_text:
+                continue
+
+            target_match: etree._Element | None = None
+            for target_child in target_rule:
+                if not isinstance(target_child.tag, str):
+                    continue
+                if target_child.tag == source_child.tag and (target_child.get("condition") or "") == source_cond:
+                    target_match = target_child
+                    break
+
+            if target_match is None:
+                target_match = etree.Element(source_child.tag, condition=source_cond)
+                target_match.text = source_text
+                target_rule.insert(0, target_match)
+                continue
+
+            existing_values = [x.strip() for x in (target_match.text or "").split(";") if x.strip()]
+            existing_lower = {x.lower() for x in existing_values}
+            if source_text.lower() not in existing_lower:
+                existing_values.append(source_text)
+                target_match.text = ";".join(existing_values)
 
     def _sigma_condition_to_sysmon(self, modifier: str) -> str:
         """Map Sigma modifier to Sysmon condition attribute."""
