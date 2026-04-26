@@ -285,12 +285,18 @@ class SysmonRuleGenerator:
                     if not include_rules and not exclude_rules:
                         continue
 
+                    mitre_infos = lolbin.get_mitre_info_for_category(category, self.mitre_technique_names)
+                    mitre_comment = self._create_mitre_comment(mitre_infos) if mitre_infos else None
+
                     for idx, inc_rule in enumerate(include_rules):
                         if include_comments and idx < len(include_comments):
                             comment_text = include_comments[idx]
                         else:
                             description = lolbin.get_description_for_category(category)
                             comment_text = self._sanitize_comment(description) if description else None
+
+                        if mitre_comment:
+                            comment_text = f"{comment_text}; {mitre_comment}" if comment_text else mitre_comment
 
                         merge_sig = self._get_rule_signature_without_executable(inc_rule)
                         if merge_sig in merged_include_rules:
@@ -324,6 +330,12 @@ class SysmonRuleGenerator:
                     if description:
                         comment = etree.Comment(f" {self._sanitize_comment(description)} ")
                         event_element.append(comment)
+
+                    mitre_infos = lolbin.get_mitre_info_for_category(category, self.mitre_technique_names)
+                    if mitre_infos:
+                        mitre_comment = self._create_mitre_comment(mitre_infos)
+                        event_element.append(etree.Comment(f" {self._sanitize_comment(mitre_comment)} "))
+
                     event_element.append(rule_element)
                     rules_added += 1
 
@@ -523,7 +535,14 @@ class SysmonRuleGenerator:
                     self._ensure_sigma_rule_bound_to_lolbin(exc_rule, lolbin, event_type)
                 all_include.extend(inc)
                 all_exclude.extend(exc)
-                include_comments.extend(self._create_sigma_branch_comments(sigma_rule, len(inc)))
+
+                sigma_comments = self._create_sigma_branch_comments(sigma_rule, len(inc))
+                mitre_infos = sigma_rule.get_mitre_info(self.mitre_technique_names)
+                if mitre_infos:
+                    mitre_comment = self._create_mitre_comment(mitre_infos)
+                    sigma_comments = [f"{c}; {mitre_comment}" if c else mitre_comment for c in sigma_comments]
+                include_comments.extend(sigma_comments)
+
             if all_include or all_exclude:
                 return all_include, all_exclude, include_comments
 
@@ -544,7 +563,11 @@ class SysmonRuleGenerator:
         cmdline_elem = etree.SubElement(rule, "CommandLine", condition="contains any")
         cmdline_elem.text = ";".join(flags)
 
-        return [rule], [], []
+        include_comments = []
+        if mitre_infos:
+            include_comments.append(self._create_mitre_comment(mitre_infos))
+
+        return [rule], [], include_comments
 
     def _create_sigma_branch_comments(self, sigma_rule: SigmaDetectionRule, branch_count: int) -> list[str]:
         """Create per-branch comments for Sigma-expanded rules.
@@ -849,21 +872,31 @@ class SysmonRuleGenerator:
 
     def _create_mitre_attribute(self, mitre_infos: list[MitreInfo]) -> str:
         """
-        Create MITRE ATT&CK annotation attribute value.
+        Create MITRE ATT&CK annotation attribute value (IDs only).
 
-        Formats technique information as semicolon-separated key=value pairs
-        for inclusion in rule 'name' attribute.
+        Full technique names are added as XML comments via _create_mitre_comment().
+        This avoids exceeding the 255-character limit on Sysmon rule names.
 
         Args:
             mitre_infos: List of MitreInfo objects with technique data.
 
         Returns:
-            Formatted string for 'name' attribute.
+            Semicolon-separated technique IDs for 'name' attribute.
         """
-        parts: list[str] = []
-        for info in mitre_infos:
-            parts.append(f"technique_id={info.technique_id},technique_name={info.technique_name}")
-        return ";".join(parts)
+        return ";".join(info.technique_id for info in mitre_infos)
+
+    def _create_mitre_comment(self, mitre_infos: list[MitreInfo]) -> str:
+        """
+        Create XML comment text with full MITRE technique information.
+
+        Args:
+            mitre_infos: List of MitreInfo objects with technique data.
+
+        Returns:
+            Formatted comment string with full technique names.
+        """
+        parts = [f"technique_id={info.technique_id},technique_name={info.technique_name}" for info in mitre_infos]
+        return f"MITRE: {'; '.join(parts)}"
 
     def to_xml_string(self, element: etree._Element, pretty: bool = True) -> str:
         """

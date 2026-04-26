@@ -143,8 +143,13 @@ class TestSysmonRuleGenerator:
         assert rule is not None
 
         name_attr = rule.get("name")
-        assert "technique_id=T1105" in name_attr
-        assert "technique_name=Ingress Tool Transfer" in name_attr
+        assert name_attr == "T1105"
+
+        # Check that MITRE comment with full info is present in XML
+        xml_str = generator.to_xml_string(rule_group)
+        assert "MITRE:" in xml_str
+        assert "technique_id=T1105" in xml_str
+        assert "technique_name=Ingress Tool Transfer" in xml_str
 
     def test_generate_all_rule_groups(self, generator, sample_lolbin):
         """Test generating all rule groups for categories."""
