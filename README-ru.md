@@ -107,6 +107,7 @@ options:
   --update-mitre        Принудительно перезагрузить данные MITRE ATT&CK JSON
   --no-sigma            Отключить обогащение на основе Sigma-правил
   --update-sigma        Принудительно перезагрузить кэшированные Sigma-правила
+  --include-group-name  Включить название группы правил в атрибут 'name' каждого правила
 ```
 
 ### Примеры
@@ -159,6 +160,11 @@ python -m lolbas_sysmon --update-data
 **Принудительное обновление только Sigma-правил:**
 ```bash
 python -m lolbas_sysmon --update-sigma
+```
+
+**Включение названия группы в атрибуты правил:**
+```bash
+python -m lolbas_sysmon --include-group-name
 ```
 
 **Показать покрытые и отсутствующие LOLBins:**

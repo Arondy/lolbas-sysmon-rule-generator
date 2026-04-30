@@ -160,6 +160,11 @@ class CLI:
             action="store_true",
             help="Show list of LOLBins covered in config (use with --coverage)",
         )
+        parser.add_argument(
+            "--include-group-name",
+            action="store_true",
+            help="Include rule group name in the 'name' attribute of each rule",
+        )
 
         rule_type_group = parser.add_mutually_exclusive_group()
         rule_type_group.add_argument(
@@ -417,7 +422,7 @@ class CLI:
             return 0
 
         # Generate rules
-        generator = SysmonRuleGenerator(config, mitre_technique_names)
+        generator = SysmonRuleGenerator(config, mitre_technique_names, include_group_name=parsed_args.include_group_name)
 
         if parsed_args.only_cmd:
             rule_type = "cmd"

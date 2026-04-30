@@ -61,6 +61,7 @@ class SysmonRuleGenerator:
         self,
         config: Config | None = None,
         mitre_technique_names: dict[str, str] | None = None,
+        include_group_name: bool = False,
     ) -> None:
         """
         Initialize the rule generator.
@@ -70,10 +71,14 @@ class SysmonRuleGenerator:
                    Defaults to empty Config if not provided.
             mitre_technique_names: Optional mapping of MITRE technique IDs
                                    to human-readable names.
+            include_group_name: If True, include the rule group name
+                               in the 'name' attribute of each rule.
         """
         self.logger = logger.bind(class_name=self.__class__.__name__)
         self.config = config or Config()
         self.mitre_technique_names = mitre_technique_names or {}
+        self._include_group_name = include_group_name
+        self._current_group_name = ""
         # Trackers for deduplication (used when unique_rules=True)
         # CMD rules: set of (executable_key, event_type, flags_key)
         self._generated_cmd_rules: set[tuple[str, str, str]] = set()
@@ -246,6 +251,7 @@ class SysmonRuleGenerator:
             RuleGroup XML element, or None if no rules were generated.
         """
         group_name = self.config.get_rule_group_name(category, with_cmdline)
+        self._current_group_name = group_name
         event_types = self.config.get_event_types(category)
         unique_rules = self.config.unique_rules
 
@@ -877,13 +883,19 @@ class SysmonRuleGenerator:
         Full technique names are added as XML comments via _create_mitre_comment().
         This avoids exceeding the 255-character limit on Sysmon rule names.
 
+        When self._include_group_name is True, the group name is prepended.
+
         Args:
             mitre_infos: List of MitreInfo objects with technique data.
 
         Returns:
-            Semicolon-separated technique IDs for 'name' attribute.
+            Semicolon-separated technique IDs for 'name' attribute,
+            optionally prefixed with the group name.
         """
-        return ";".join(info.technique_id for info in mitre_infos)
+        ids = ";".join(info.technique_id for info in mitre_infos)
+        if self._include_group_name and self._current_group_name:
+            return f"{self._current_group_name};{ids}"
+        return ids
 
     def _create_mitre_comment(self, mitre_infos: list[MitreInfo]) -> str:
         """

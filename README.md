@@ -107,6 +107,7 @@ options:
   --update-mitre        Force re-download of MITRE ATT&CK JSON data from URL
   --no-sigma            Disable Sigma-based rule enrichment
   --update-sigma        Force re-download of cached Sigma rules
+  --include-group-name  Include rule group name in the 'name' attribute of each rule
 ```
 
 ### Examples
@@ -159,6 +160,11 @@ python -m lolbas_sysmon --update-data
 **Force update only Sigma rules:**
 ```bash
 python -m lolbas_sysmon --update-sigma
+```
+
+**Include group name in rule attributes:**
+```bash
+python -m lolbas_sysmon --include-group-name
 ```
 
 **Show covered and missing LOLBins:**
