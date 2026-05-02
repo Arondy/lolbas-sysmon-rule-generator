@@ -32,6 +32,7 @@ LOLBAS Project documents legitimate Windows binaries that can be abused by attac
 - **Coverage Analysis** — Analyze how many LOLBins are covered by an existing Sysmon config
 - **Deduplication** — Optional `--unique-rules` flag to skip duplicate rules across categories
 - **Detailed Statistics** — Sigma enrichment summary with download/parse/skip counters
+- **Rule Testing** — [ART-LOLBIN-Tests](ART-LOLBIN-Tests/) subproject for automated Sysmon rule testing using Atomic Red Team scenarios
 
 ## Installation
 
@@ -415,6 +416,28 @@ If you use Poetry:
 ```bash
 poetry run python -m pytest tests -v
 ```
+
+## Atomic Red Team Rule Testing
+
+`ART-LOLBIN-Tests/` is designed for automated testing of Sysmon rules for the ability to detect LOLBin attacks. Uses scenarios from the [Atomic Red Team](https://github.com/redcanaryco/atomic-red-team) database.
+
+### Features
+
+- Automatic search for LOLBin techniques in Atomic Red Team
+- Configuration generation for test runs
+- Collection and analysis of Sysmon events around test execution
+- Detection quality assessment: TP, FN, recall
+- Support for saving intermediate results
+
+### Quick Start
+
+```bash
+cd ART-LOLBIN-Tests
+.\AtomicRedTeam_LOLBIN_TESTS.ps1
+python main.py --config ART_lolbin_tests/config_generated.json --output test_results/results.json
+```
+
+See [README](ART-LOLBIN-Tests/README.md) in the folder for details.
 
 ## Development
 

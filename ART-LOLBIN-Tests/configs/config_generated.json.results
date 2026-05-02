@@ -1,0 +1,553 @@
+{
+  "atomics_path": "C:\\AtomicRedTeam\\atomic-red-team\\atomics",
+  "output_json_path": "run_result.json",
+  "sysmon_channel": "Microsoft-Windows-Sysmon/Operational",
+  "marker_timeout_seconds": 20,
+  "marker_poll_interval_seconds": 0.5,
+  "marker_scan_limit": 300,
+  "query_batch_size": 128,
+  "grace_seconds": 0,
+  "atomic_timeout_seconds": 60,
+  "run_cleanup": true,
+  "tests": [
+    {
+      "technique_id": "T1055",
+      "test_numbers": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12,
+        13
+      ]
+    },
+    {
+      "technique_id": "T1055.001",
+      "test_numbers": [
+        1,
+        2
+      ]
+    },
+    {
+      "technique_id": "T1055.002",
+      "test_numbers": [
+        1
+      ]
+    },
+    {
+      "technique_id": "T1055.003",
+      "test_numbers": [
+        1
+      ]
+    },
+    {
+      "technique_id": "T1055.004",
+      "test_numbers": [
+        1,
+        2,
+        3
+      ]
+    },
+    {
+      "technique_id": "T1055.011",
+      "test_numbers": [
+        1
+      ]
+    },
+    {
+      "technique_id": "T1055.012",
+      "test_numbers": [
+        1,
+        2,
+        3,
+        4
+      ]
+    },
+    {
+      "technique_id": "T1055.015",
+      "test_numbers": [
+        1
+      ]
+    },
+    {
+      "technique_id": "T1059",
+      "test_numbers": [
+        1
+      ]
+    },
+    {
+      "technique_id": "T1059.001",
+      "test_numbers": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12,
+        13,
+        14,
+        15,
+        16,
+        17,
+        18,
+        19,
+        20,
+        21,
+        22
+      ]
+    },
+    {
+      "technique_id": "T1059.003",
+      "test_numbers": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6
+      ]
+    },
+    {
+      "technique_id": "T1059.005",
+      "test_numbers": [
+        1,
+        2,
+        3
+      ]
+    },
+    {
+      "technique_id": "T1059.007",
+      "test_numbers": [
+        1,
+        2
+      ]
+    },
+    {
+      "technique_id": "T1059.010",
+      "test_numbers": [
+        1
+      ]
+    },
+    {
+      "technique_id": "T1105",
+      "test_numbers": [
+        7,
+        8,
+        9,
+        10,
+        11,
+        12,
+        13,
+        15,
+        16,
+        17,
+        18,
+        19,
+        20,
+        21,
+        22,
+        23,
+        24,
+        25,
+        26,
+        28,
+        29,
+        30,
+        32,
+        33,
+        34,
+        35,
+        36,
+        37,
+        38
+      ]
+    },
+    {
+      "technique_id": "T1127",
+      "test_numbers": [
+        1,
+        2
+      ]
+    },
+    {
+      "technique_id": "T1127.001",
+      "test_numbers": [
+        1,
+        2
+      ]
+    },
+    {
+      "technique_id": "T1216",
+      "test_numbers": [
+        1,
+        2
+      ]
+    },
+    {
+      "technique_id": "T1216.001",
+      "test_numbers": [
+        1
+      ]
+    },
+    {
+      "technique_id": "T1218",
+      "test_numbers": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12,
+        13,
+        14,
+        15,
+        16
+      ]
+    },
+    {
+      "technique_id": "T1218.001",
+      "test_numbers": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8
+      ]
+    },
+    {
+      "technique_id": "T1218.002",
+      "test_numbers": [
+        1
+      ]
+    },
+    {
+      "technique_id": "T1218.003",
+      "test_numbers": [
+        1,
+        2
+      ]
+    },
+    {
+      "technique_id": "T1218.004",
+      "test_numbers": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8
+      ]
+    },
+    {
+      "technique_id": "T1218.005",
+      "test_numbers": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10
+      ]
+    },
+    {
+      "technique_id": "T1218.007",
+      "test_numbers": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11
+      ]
+    },
+    {
+      "technique_id": "T1218.008",
+      "test_numbers": [
+        1,
+        2
+      ]
+    },
+    {
+      "technique_id": "T1218.009",
+      "test_numbers": [
+        1,
+        2
+      ]
+    },
+    {
+      "technique_id": "T1218.010",
+      "test_numbers": [
+        1,
+        2,
+        3,
+        4,
+        5
+      ]
+    },
+    {
+      "technique_id": "T1218.011",
+      "test_numbers": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12,
+        13,
+        14,
+        15,
+        16
+      ]
+    },
+    {
+      "technique_id": "T1547",
+      "test_numbers": [
+        1,
+        2,
+        3
+      ]
+    },
+    {
+      "technique_id": "T1547.001",
+      "test_numbers": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12,
+        13,
+        14,
+        15,
+        16,
+        17,
+        18,
+        19,
+        20
+      ]
+    },
+    {
+      "technique_id": "T1547.002",
+      "test_numbers": [
+        1
+      ]
+    },
+    {
+      "technique_id": "T1547.003",
+      "test_numbers": [
+        1,
+        2
+      ]
+    },
+    {
+      "technique_id": "T1547.004",
+      "test_numbers": [
+        1,
+        2,
+        3,
+        4,
+        5
+      ]
+    },
+    {
+      "technique_id": "T1547.005",
+      "test_numbers": [
+        1,
+        2
+      ]
+    },
+    {
+      "technique_id": "T1547.006",
+      "test_numbers": [
+        4
+      ]
+    },
+    {
+      "technique_id": "T1547.008",
+      "test_numbers": [
+        1
+      ]
+    },
+    {
+      "technique_id": "T1547.009",
+      "test_numbers": [
+        1,
+        2
+      ]
+    },
+    {
+      "technique_id": "T1547.010",
+      "test_numbers": [
+        1
+      ]
+    },
+    {
+      "technique_id": "T1547.012",
+      "test_numbers": [
+        1
+      ]
+    },
+    {
+      "technique_id": "T1547.014",
+      "test_numbers": [
+        1,
+        2,
+        3
+      ]
+    },
+    {
+      "technique_id": "T1547.015",
+      "test_numbers": [
+        1
+      ]
+    },
+    {
+      "technique_id": "T1562",
+      "test_numbers": [
+        1
+      ]
+    },
+    {
+      "technique_id": "T1562.001",
+      "test_numbers": [
+        13,
+        14,
+        15,
+        16,
+        17,
+        18,
+        19,
+        20,
+        21,
+        22,
+        23,
+        24,
+        25,
+        27,
+        28,
+        29,
+        31,
+        32,
+        33,
+        34,
+        35,
+        36,
+        37,
+        38,
+        44,
+        45,
+        48,
+        49,
+        51,
+        52,
+        53
+      ]
+    },
+    {
+      "technique_id": "T1562.002",
+      "test_numbers": [
+        1,
+        2,
+        4,
+        5
+      ]
+    },
+    {
+      "technique_id": "T1562.003",
+      "test_numbers": [
+        11,
+        12
+      ]
+    },
+    {
+      "technique_id": "T1562.004",
+      "test_numbers": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        20,
+        21,
+        22,
+        23,
+        24,
+        25
+      ]
+    },
+    {
+      "technique_id": "T1562.006",
+      "test_numbers": [
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12,
+        13,
+        14
+      ]
+    },
+    {
+      "technique_id": "T1562.009",
+      "test_numbers": [
+        1
+      ]
+    },
+    {
+      "technique_id": "T1562.010",
+      "test_numbers": [
+        2,
+        3
+      ]
+    }
+  ]
+}

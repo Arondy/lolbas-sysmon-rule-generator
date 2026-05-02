@@ -1,0 +1,25 @@
+{
+  "atomics_path": "C:\\AtomicRedTeam\\atomic-red-team\\atomics",
+  "output_json_path": "run_result.json",
+  "sysmon_channel": "Microsoft-Windows-Sysmon/Operational",
+  "marker_timeout_seconds": 20,
+  "marker_poll_interval_seconds": 0.5,
+  "marker_scan_limit": 300,
+  "query_batch_size": 128,
+  "grace_seconds": 0,
+  "atomic_timeout_seconds": 60,
+  "run_cleanup": true,
+  "tests": [
+    {
+      "technique_id": "T1218.010",
+      "test_numbers": [
+        1,
+        2
+      ]
+    },
+    {
+      "technique_id": "T1059.001",
+      "test_number": 1
+    }
+  ]
+}

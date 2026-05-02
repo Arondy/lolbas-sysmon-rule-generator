@@ -32,6 +32,7 @@ LOLBAS Project документирует легитимные бинарные 
 - **Анализ покрытия** — Анализ сколько LOLBins покрыто существующей конфигурацией Sysmon
 - **Дедупликация** — Опциональный флаг `--unique-rules` для пропуска дублирующихся правил между категориями
 - **Детальная статистика** — Сводка обогащения Sigma с счётчиками загрузок/парсинга/пропусков
+- **Тестирование правил** — Подпроект [ART-LOLBIN-Tests](ART-LOLBIN-Tests/) для автоматизированного тестирования правил Sysmon с использованием Atomic Red Team сценариев
 
 ## Установка
 
@@ -415,6 +416,28 @@ python -m pytest tests -v
 ```bash
 poetry run python -m pytest tests -v
 ```
+
+## Тестирование правил с Atomic Red Team
+
+`ART-LOLBIN-Tests/` предназначен для автоматизированного тестирования правил Sysmon на способность детектировать LOLBin-атаки. Использует сценарии из базы [Atomic Red Team](https://github.com/redcanaryco/atomic-red-team).
+
+### Возможности
+
+- Автоматический поиск LOLBin-техник в Atomic Red Team
+- Генерация конфигурации для запуска тестов
+- Сбор и анализ событий Sysmon вокруг выполнения тестов
+- Оценка качества детектирования: TP, FN, recall
+- Поддержка сохранения промежуточных результатов
+
+### Быстрый старт
+
+```bash
+cd ART-LOLBIN-Tests
+.\AtomicRedTeam_LOLBIN_TESTS.ps1
+python main.py --config ART_lolbin_tests/config_generated.json --output test_results/results.json
+```
+
+Подробнее в [README](ART-LOLBIN-Tests/README.md) в папке.
 
 ## Разработка
 
